@@ -1,0 +1,8 @@
+{
+  "name": "jobscope",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bilingual deep research workspace for jobs and any topic",
+  "scripts": {"start":"node server.js","dev":"node server.js"},
+  "engines": {"node":">=18"}
+}
