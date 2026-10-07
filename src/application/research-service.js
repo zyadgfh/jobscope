@@ -4,6 +4,7 @@ const { createResearchRun, canTransition } = require('../domain/research/researc
 class ResearchService {
   constructor(store) {
     this.store = store;
+    this.listeners = new Map();
   }
 
   create({ goal, mode, actorId }) {
@@ -13,11 +14,27 @@ class ResearchService {
       mode,
       actorId
     });
-    return this.store.create(run);
+    const saved = this.store.create(run);
+    this.emit(saved.id, { type: 'run.created', runId: saved.id, state: saved.state, at: saved.createdAt });
+    return saved;
   }
 
   get(id) {
     return this.store.get(id);
+  }
+
+  subscribe(id, listener) {
+    const set = this.listeners.get(id) || new Set();
+    set.add(listener);
+    this.listeners.set(id, set);
+    return () => {
+      set.delete(listener);
+      if (!set.size) this.listeners.delete(id);
+    };
+  }
+
+  emit(id, event) {
+    for (const listener of this.listeners.get(id) || []) listener(event);
   }
 
   transition(id, target) {
@@ -33,16 +50,21 @@ class ResearchService {
     run.updatedAt = now;
     run.timeline.push({ state: target, at: now });
     run.checkpoints.push({ state: target, at: now });
-    return this.store.save(run);
+    const saved = this.store.save(run);
+    this.emit(id, { type: 'run.state_changed', runId: id, state: target, at: now });
+    return saved;
   }
 
   pause(id) { return this.transition(id, 'paused'); }
+
   resume(id) {
     const run = this.store.get(id);
     if (!run) return null;
-    const target = run.timeline.length > 1 ? run.timeline[run.timeline.length - 2].state : 'planning';
-    return this.transition(id, target === 'paused' ? 'planning' : target);
+    const previous = [...run.timeline].reverse().find(x => x.state !== 'paused');
+    const target = previous && previous.state !== 'created' ? previous.state : 'planning';
+    return this.transition(id, target);
   }
+
   cancel(id) { return this.transition(id, 'cancelled'); }
 }
 
