@@ -47,3 +47,15 @@ npm test
 المصادر المحمية أو التي تتطلب تسجيل دخول لا يتم تجاوزها؛ تُستخدم APIs الرسمية أو الطرق المسموح بها، مع fallback/human-in-loop عند الحاجة.
 
 طبقة Supabase وFirebase يمكن إضافتها بعد إنشاء الموارد وربط الأسرار في الخادم، دون تخزين بيانات شخصية في الواجهة.
+
+
+### Research Intelligence layers now implemented
+
+- deterministic research planning and evidence-sufficiency stopping
+- evidence states and evidence-quality scoring
+- governed source registry and SSRF-safe public source retrieval
+- text normalization and job candidate canonicalization
+- job entity-resolution primitives for multi-source postings
+- evidence-gated recommendation and report generation
+
+The system still refuses to invent market facts when source evidence is unavailable.
