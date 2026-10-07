@@ -1,3 +1,8 @@
-function canonicalKey(candidate){return [candidate.company,candidate.title,candidate.location].map(x=>String(x||'').toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g,' ').trim()).join('|')}
-function resolveCandidates(candidates=[]){const groups=new Map();for(const c of candidates){const key=canonicalKey(c);const group=groups.get(key)||{key,representative:c,postings:[]};group.postings.push(c);if((c.confidence||0)>(group.representative.confidence||0))group.representative=c;groups.set(key,group)}return [...groups.values()]}
-module.exports={canonicalKey,resolveCandidates};
+function norm(value){return String(value||'').toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g,' ').trim()}
+function tokens(value){return new Set(norm(value).split(/\s+/).filter(x=>x.length>1))}
+function jaccard(a,b){const aa=tokens(a),bb=tokens(b);if(!aa.size&&!bb.size)return 1;let inter=0;for(const x of aa)if(bb.has(x))inter++;const union=new Set([...aa,...bb]).size;return union?inter/union:0}
+function similarity(a,b){return {title:jaccard(a?.title,b?.title),company:jaccard(a?.company,b?.company),location:jaccard(a?.location,b?.location)}}
+function compatible(a,b){const s=similarity(a,b);const companyExact=norm(a.company)&&norm(a.company)===norm(b.company);const titleStrong=s.title>=.8;const companyStrong=companyExact||s.company>=.8;const locationStrong=!norm(a.location)||!norm(b.location)||s.location>=.6;return titleStrong&&companyStrong&&locationStrong}
+function canonicalKey(candidate){return [candidate.company,candidate.title,candidate.location].map(norm).join('|')}
+function resolveCandidates(candidates=[]){const groups=[];for(const c of candidates){let found=groups.find(g=>compatible(g.representative,c));if(!found){found={key:canonicalKey(c),representative:c,postings:[]};groups.push(found)}found.postings.push(c);if((c.confidence||0)>(found.representative.confidence||0))found.representative=c}for(const g of groups)g.key=canonicalKey(g.representative);return groups}
+module.exports={canonicalKey,resolveCandidates,jaccard,similarity,compatible};
