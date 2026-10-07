@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {scorePersonalFit,normalizePreferences}=require('../src/domain/research/profile-scoring');
+test('empty profile produces no personal score',()=>assert.equal(scorePersonalFit({title:'Data Entry'},{}),null));
+test('salary and location preferences produce explainable fit',()=>{const p=normalizePreferences({minSalary:7000,targetLocations:['Alexandria'],workMode:'onsite',requiredKeywords:['excel']});const r=scorePersonalFit({title:'Data Entry Excel',location:'Sidi Gaber, Alexandria',salary:{amount:{min:7000,max:9000}},employment:{workMode:'onsite'},description:'Excel work'},p);assert(r.score>=90);assert(r.signals.some(x=>x.field==='salary'&&x.status==='match'))});

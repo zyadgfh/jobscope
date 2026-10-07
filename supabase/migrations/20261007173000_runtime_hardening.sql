@@ -14,10 +14,16 @@ alter table if exists public.research_runs add column if not exists token_expire
 alter table if exists public.research_runs add column if not exists paused_from text;
 alter table if exists public.research_runs add column if not exists parent_run_id uuid references public.research_runs(id) on delete set null;
 alter table if exists public.research_runs add column if not exists revision integer not null default 1 check(revision>0);
+alter table if exists public.research_runs add column if not exists preferences jsonb not null default '{}'::jsonb;
+alter table if exists public.research_runs add column if not exists preferences_expires_at timestamptz;
 
 alter table if exists public.job_opportunities add column if not exists decision_score numeric(5,2) check(decision_score between 0 and 100);
 alter table if exists public.job_opportunities add column if not exists data_quality numeric(5,2) check(data_quality between 0 and 100);
 alter table if exists public.job_opportunities add column if not exists risk_flags jsonb not null default '[]'::jsonb;
+alter table if exists public.job_opportunities add column if not exists financial jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists career jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists decision_components jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists opportunity_cost numeric(5,2) check(opportunity_cost between 0 and 100);
 
 create table if not exists public.research_tasks (
  id bigserial primary key, run_id uuid not null references public.research_runs(id) on delete cascade,

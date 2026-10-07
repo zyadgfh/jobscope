@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const app=fs.readFileSync(require('node:path').join(__dirname,'..','app.js'),'utf8');
+test('frontend defines an HTML escaping boundary',()=>{assert.match(app,/const esc=v=>/);assert.match(app,/esc\(x\.claim\)/);assert.match(app,/esc\(j\.title/);});
+test('frontend does not interpolate raw generic claims into the job-card title',()=>{assert.doesNotMatch(app,/h4>\'+x\.claim/);});
