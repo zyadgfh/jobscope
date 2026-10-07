@@ -103,6 +103,8 @@ function evaluateRunShell(run){return {id:run.id};}
 module.exports=async function handler(req,res){
   if(req.method!=='POST')return res.status(405).json({error:'METHOD_NOT_ALLOWED'});
   const token=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'').trim();
+  const tokenIsJwt=/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+  if(!tokenIsJwt)return res.status(401).json({error:'INVALID_ACCESS_TOKEN'});
   if(!token)return res.status(401).json({error:'UNAUTHORIZED'});
   try{
     let run=(await call({op:'get'},{token})).run;
