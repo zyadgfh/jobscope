@@ -1,0 +1,4 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {compatible,resolveCandidates}=require('../src/domain/research/entity-resolution');
+test('conservatively merges formatting differences',()=>assert.equal(compatible({title:'Data Entry Specialist',company:'ACME LTD',location:'Alexandria'},{title:'Data Entry Specialist',company:'ACME Limited',location:'Alexandria, Egypt'}),true));
+test('does not merge unrelated titles from same company',()=>assert.equal(compatible({title:'Data Entry',company:'ACME',location:'Alexandria'},{title:'Sales Representative',company:'ACME',location:'Alexandria'}),false));
+test('groups fuzzy equivalent postings',()=>{const r=resolveCandidates([{title:'Data Entry Specialist',company:'ACME LTD',location:'Alexandria',confidence:.6},{title:'Data Entry Specialist',company:'ACME Limited',location:'Alexandria, Egypt',confidence:.9}]);assert.equal(r.length,1);assert.equal(r[0].postings.length,2)});
