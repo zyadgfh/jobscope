@@ -28,10 +28,12 @@ module.exports=async function handler(req,res){
   for(const task of run.tasks||[]){if(task.task_type==='manual_research'&&task.status==='pending')await call({op:'task',taskKey:task.task_key,status:'blocked_manual'},{token})}
   run=(await call({op:'transition',target:'extracting'},{token})).run;
   const groups=resolveCandidates(all.jobs);
+  const scoredGroups=groups.map(group=>{const independentSources=new Set(group.postings.map(p=>p.sourceId).filter(Boolean)).size;const evidenceConfidence=all.evidence.filter(e=>group.postings.some(p=>p.canonicalKey===group.key&&p.sourceId===e.sourceId)).reduce((a,e)=>Math.max(a,e.confidence||0),0);const sourceReliability=all.sources.filter(s=>group.postings.some(p=>p.url&&s.metadata?.provider===p.sourceId)).reduce((a,s)=>Math.max(a,s.reliability||0),0);const scoring=scoreOpportunity(group.representative,{sourceReliability,evidenceConfidence,independentSources});return {...group,decisionScore:scoring.score,dataQuality:scoring.dataQuality,riskFlags:scoring.riskFlags,scoreComponents:scoring.components}});const ranked=rankOpportunities(scoredGroups);
   const verificationTask=(run.tasks||[]).find(t=>t.task_key==='verify_cross_source');
   if(verificationTask?.status==='pending')await call({op:'task',taskKey:'verify_cross_source',status:'running',attempts:verificationTask.attempts||0},{token});
   const verified=groups.filter(g=>new Set(g.postings.map(p=>p.sourceId).filter(Boolean)).size>=2).map(g=>({claim:'The same job opportunity is independently listed across '+new Set(g.postings.map(p=>p.sourceId)).size+' sources: '+(g.representative.title||g.key),sourceId:g.representative.sourceId,status:'verified_fact',confidence:.9,provenance:{canonicalKey:g.key,independentSources:[...new Set(g.postings.map(p=>p.sourceId).filter(Boolean))],postings:g.postings.map(p=>p.url).filter(Boolean)}}));
-  run=(await call({op:'ingest',sources:all.sources,documents:all.documents,jobs:all.jobs,evidence:all.evidence},{token})).run;
+  const jobsToStore=all.jobs.map(job=>{const g=ranked.find(x=>x.key===job.canonicalKey);return g?{...job,decisionScore:g.decisionScore,dataQuality:g.dataQuality,riskFlags:g.riskFlags}:job});
+  run=(await call({op:'ingest',sources:all.sources,documents:all.documents,jobs:jobsToStore,evidence:all.evidence},{token})).run;
   run=(await call({op:'transition',target:'verifying'},{token})).run;
   if(verified.length)run=(await call({op:'ingest',evidence:verified},{token})).run;
   if(verificationTask?.status==='pending')await call({op:'task',taskKey:'verify_cross_source',status:'completed'},{token});
