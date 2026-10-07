@@ -1,0 +1,3 @@
+function canonicalKey(candidate){return [candidate.company,candidate.title,candidate.location].map(x=>String(x||'').toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g,' ').trim()).join('|')}
+function resolveCandidates(candidates=[]){const groups=new Map();for(const c of candidates){const key=canonicalKey(c);const group=groups.get(key)||{key,representative:c,postings:[]};group.postings.push(c);if((c.confidence||0)>(group.representative.confidence||0))group.representative=c;groups.set(key,group)}return [...groups.values()]}
+module.exports={canonicalKey,resolveCandidates};
