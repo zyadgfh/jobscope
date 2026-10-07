@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobscope://schemas/research-run",
+  "type": "object",
+  "required": ["id","type","version","goalSnapshot","mode","state","createdAt","updatedAt","timeline"],
+  "properties": {
+    "id": {"type":"string","minLength":1},
+    "type": {"const":"research_run"},
+    "version": {"type":"integer","minimum":1},
+    "goalSnapshot": {"type":"string","minLength":1},
+    "mode": {"enum":["cheap","balanced","quality","maximum"]},
+    "state": {"enum":["created","planning","searching","extracting","verifying","scoring","reporting","completed","paused","cancelled","failed"]},
+    "createdAt": {"type":"string","format":"date-time"},
+    "updatedAt": {"type":"string","format":"date-time"},
+    "timeline": {"type":"array","items":{"type":"object","required":["state","at"],"properties":{"state":{"type":"string"},"at":{"type":"string","format":"date-time"}}}}
+  }
+}
