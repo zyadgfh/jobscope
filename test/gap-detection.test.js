@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {detectGaps,buildExpansionQueries}=require('../src/domain/research/gap-detection');
+test('detects low source diversity and missing salary coverage',()=>{const g=detectGaps({jobs:[{sourceId:'wuzzuf',salary:null},{sourceId:'wuzzuf',salary:null}],evidence:[{sourceId:'wuzzuf'}],sources:[]});assert(g.some(x=>x.type==='source_diversity'));assert(g.some(x=>x.type==='salary_coverage'))});
+test('expansion queries remain bounded and deterministic',()=>{assert.deepEqual(buildExpansionQueries('Data Entry','Alexandria',[{type:'no_opportunities'}]),['Data Entry vacancy Alexandria','Data Entry وظائف Alexandria'])});

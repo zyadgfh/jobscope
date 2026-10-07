@@ -1,0 +1,3 @@
+const STATUSES=new Set(['verified_fact','reported','estimated','inferred','unknown','conflicting']);
+function sanitizeEvidenceStatus(status,provenance={}){const requested=STATUSES.has(status)?status:'reported';const trusted=requested==='verified_fact'&&provenance.verificationMethod==='cross_source_core_v1'&&Array.isArray(provenance.independentSources)&&provenance.independentSources.length>=2;return trusted?'verified_fact':requested==='verified_fact'?'reported':requested}
+module.exports={sanitizeEvidenceStatus,STATUSES};
