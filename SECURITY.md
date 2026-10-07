@@ -20,3 +20,6 @@
 ## Known limitation
 
 The current production deployment contains the executable Research Run control plane and honest UI, but source retrieval adapters, cross-source extraction, Evidence Graph persistence, scoring, and authentication are still staged behind the foundation. The UI intentionally reports Unknown rather than fabricating results until those layers are active.
+
+- Public source retrieval is domain-allowlisted, blocks private-network targets and embedded credentials, rejects unsafe redirects/content types, limits response size, and applies a per-instance request limit.
+- Supabase publishable access is intentionally low privilege; no secret/service-role credential is shipped to the client.
