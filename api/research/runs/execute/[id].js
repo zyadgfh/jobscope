@@ -41,8 +41,9 @@ function dedupeGapsForExpansion(run,snapshot){
 }
 
 async function finalizeRun(run,token){
-  const snap=(await call({op:'snapshot'},{token})).run;
-  const jobs=rebuildJobs(snap);
+  const snapshot=await call({op:'snapshot'},{token});
+  const snap=snapshot.run;
+  const jobs=rebuildJobs(snapshot);
   const enriched=jobs.map(job=>{
     const evidenceForJob=(snap.evidence||[]).filter(e=>jobs.some(j=>j.id===job.id&&j.sourceId===e.source_id));
     const confidence=evidenceForJob.reduce((a,e)=>Math.max(a,Number(e.confidence||0)),0);
@@ -55,7 +56,7 @@ async function finalizeRun(run,token){
   const ranked=evaluated.sort((a,b)=>b.decisionScore-a.decisionScore).map(item=>({...item,decisionComponents:{objective:item.objectiveScore,fit:item.fitScore,financial:item.financialScore,career:item.careerProfile?.score,risk:item.riskProfile?.score,opportunityCost:item.opportunityCost,weights:item.decisionWeights}}));
   const verificationClaims=[];
   for(const job of jobs){
-    const posting=(snap.postings||[]).filter(p=>p.opportunity_id===job.id);
+    const posting=(snapshot.postings||[]).filter(p=>p.opportunity_id===job.id);
     const independent=[...new Set(posting.map(p=>p.source_id).filter(Boolean))];
     if(independent.length>=2){
       verificationClaims.push({
@@ -73,7 +74,7 @@ async function finalizeRun(run,token){
   const evidenceScore=scoreEvidence({evidence:allEvidence,sourceDiversity});
   const best=ranked[0]||null;
   const recommendation=buildRecommendation({domain:run.plan?.domain||'jobs',evidenceScore:evidenceScore.score,fitScore:best?.fitScore??null,opportunities:ranked});
-  const gaps=dedupeGapsForExpansion(run,{...snap,opportunities:jobs,evidence:allEvidence}).gaps;
+  const gaps=dedupeGapsForExpansion(run,{...snapshot,opportunities:jobs,evidence:allEvidence}).gaps;
   const report=buildReport({run:evaluateRunShell(run),evidence:allEvidence,recommendation,opportunities:ranked,evidenceScore,gaps});
   report.execution={mode:'checkpointed',status:'finalized',stopping:gaps.length?'gaps_remaining':'evidence_sufficient'};
   report.manualSources=(snap.run.tasks||[]).filter(t=>t.status==='blocked_manual').map(t=>t.task_key);
