@@ -1,0 +1,2 @@
+function buildReport({run,evidence=[],recommendation=null}={}){return {version:'1.0',runId:run?.id||null,generatedAt:new Date().toISOString(),executive:{recommendation:recommendation||{status:'insufficient_evidence'},evidenceCount:evidence.length},claims:evidence.map(e=>({claim:e.claim,status:e.status,confidence:e.confidence,sourceId:e.sourceId,retrievedAt:e.retrievedAt,provenance:e.provenance}))}}
+module.exports={buildReport};
