@@ -8,10 +8,10 @@ JobScope ينتقل تدريجيًا من نموذج UX أولي إلى منصة
 
 ### ما تم تفعيله
 
-- Research Run دائم داخل طبقة domain مع دورة حالات قابلة للتحقق.
+- Research Run داخل طبقة domain مع دورة حالات قابلة للتحقق.
 - Goal Snapshot وTimeline وCheckpoints لكل تشغيل بحث.
 - API أولي لإنشاء واسترجاع وإيقاف مؤقت واستئناف وإلغاء Research Run.
-- In-memory repository كبداية صفرية التكلفة، مع واجهة قابلة للاستبدال لاحقًا بـ PostgreSQL.
+- In-memory repository كبداية صفرية التكلفة، مع قابلية الاستبدال لاحقًا بـ PostgreSQL.
 - Security headers أساسية وpayload limit لطلبات JSON.
 - اختبارات Node.js مبدئية للـ domain lifecycle.
 - الحفاظ على الواجهة الحالية أثناء استبدال الـ mock pipeline تدريجيًا.
