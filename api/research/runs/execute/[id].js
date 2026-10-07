@@ -6,6 +6,7 @@ const {buildReport}=require('../../../../src/domain/research/report');
 const {resolveCandidates}=require('../../../../src/domain/research/entity-resolution');
 const {scoreOpportunity,rankOpportunities}=require('../../../../src/domain/research/opportunity-scoring');
 const {scorePersonalFit}=require('../../../../src/domain/research/profile-scoring');
+const {evaluateOpportunities}=require('../../../../src/domain/research/decision-engine');
 const {detectGaps,buildExpansionQueries}=require('../../../../src/domain/research/gap-detection');
 
 async function runSearchTask(task,run,token,all,provider){
@@ -64,18 +65,8 @@ module.exports=async function handler(req,res){
 
   run=(await call({op:'transition',target:'extracting'},{token})).run;
   const groups=resolveCandidates(all.jobs);
-  const scoredGroups=groups.map(group=>{
-    const independentSources=new Set(group.postings.map(p=>p.sourceId).filter(Boolean)).size;
-    const evidenceForGroup=all.evidence.filter(e=>group.postings.some(p=>p.canonicalKey===group.key&&p.sourceId===e.sourceId));
-    const evidenceConfidence=evidenceForGroup.reduce((a,e)=>Math.max(a,e.confidence||0),0);
-    const sourceReliability=all.sources.filter(s=>group.postings.some(p=>s.metadata?.provider===p.sourceId)).reduce((a,s)=>Math.max(a,s.reliability||0),0);
-    const objective=scoreOpportunity(group.representative,{sourceReliability,evidenceConfidence,independentSources});
-    const fit=scorePersonalFit(group.representative,run.preferences||{});
-    const decisionScore=fit===null?objective.score:Number((objective.score*.65+fit.score*.35).toFixed(2));
-    return {...group,decisionScore,dataQuality:objective.dataQuality,riskFlags:objective.riskFlags,fitScore:fit?.score??null,fitSignals:fit?.signals??[],scoreComponents:objective.components};
-  });
-  const ranked=rankOpportunities(scoredGroups);
-  const verificationTask=(run.tasks||[]).find(t=>t.task_key==='verify_cross_source');
+  const preliminary=groups.map(group=>{const independentSources=new Set(group.postings.map(p=>p.sourceId).filter(Boolean)).size;const evidenceForGroup=all.evidence.filter(e=>group.postings.some(p=>p.canonicalKey===group.key&&p.sourceId===e.sourceId));const evidenceConfidence=evidenceForGroup.reduce((a,e)=>Math.max(a,e.confidence||0),0);const sourceReliability=all.sources.filter(s=>group.postings.some(p=>s.metadata?.provider===p.sourceId)).reduce((a,s)=>Math.max(a,s.reliability||0),0);const objective=scoreOpportunity(group.representative,{sourceReliability,evidenceConfidence,independentSources});const fit=run.plan?.domain==='jobs'?scorePersonalFit(group.representative,run.preferences||{}):null;return {...group,objectiveScore:objective.score,dataQuality:objective.dataQuality,riskFlags:objective.riskFlags,fitScore:fit?.score??null,fitSignals:fit?.signals??[],scoreComponents:objective.components,sourceCount:independentSources}});
+  const ranked=evaluateOpportunities(preliminary.map(group=>({...group.representative,canonicalKey:group.key,objectiveScore:group.objectiveScore,fit:{score:group.fitScore},fitScore:group.fitScore,sourceCount:group.sourceCount,sourceReliability:group.scoreComponents?.source}),{}).map((x,i)=>({...preliminary[i],representative:x}))).map(x=>({...x,representative:x.representative,fitScore:x.fitScore,dataQuality:x.dataQuality,riskFlags:[...(x.riskFlags||[]),...(x.riskProfile?.flags||[])],financialProfile:x.financialProfile,careerProfile:x.careerProfile,decisionComponents:{objective:x.objectiveScore,fit:x.fitScore,financial:x.financialScore,career:x.careerProfile?.score,risk:x.riskProfile?.score,opportunityCost:x.opportunityCost,weights:x.decisionWeights}}));const verificationTask=(run.tasks||[]).find(t=>t.task_key==='verify_cross_source');
   if(verificationTask?.status==='pending')await call({op:'task',taskKey:'verify_cross_source',status:'running',attempts:verificationTask.attempts||0},{token});
 
   const verified=groups.filter(g=>new Set(g.postings.map(p=>p.sourceId).filter(Boolean)).size>=2).map(g=>({
@@ -84,7 +75,7 @@ module.exports=async function handler(req,res){
     provenance:{canonicalKey:g.key,evidenceKey:'verify-'+g.key,verificationMethod:'cross_source_core_v1',independentSources:[...new Set(g.postings.map(p=>p.sourceId).filter(Boolean))],postings:g.postings.map(p=>p.url).filter(Boolean)}
   }));
 
-  const jobsToStore=all.jobs.map(job=>{const g=ranked.find(x=>x.key===job.canonicalKey);return g?{...job,decisionScore:g.decisionScore,dataQuality:g.dataQuality,riskFlags:g.riskFlags,fit:g.fitScore===null?null:{score:g.fitScore,signals:g.fitSignals}}:job});
+  const jobsToStore=all.jobs.map(job=>{const g=ranked.find(x=>x.key===job.canonicalKey);return g?{...job,decisionScore:g.decisionScore,objectiveScore:g.objectiveScore,dataQuality:g.dataQuality,riskFlags:g.riskFlags,fit:g.fitScore===null?null:{score:g.fitScore,signals:g.fitSignals},financial:g.financialProfile,career:g.careerProfile,decisionComponents:g.decisionComponents,opportunityCost:g.opportunityCost}:job});
   run=(await call({op:'ingest',sources:all.sources,documents:all.documents,jobs:jobsToStore,evidence:all.evidence},{token})).run;
   run=(await call({op:'transition',target:'verifying'},{token})).run;
 
