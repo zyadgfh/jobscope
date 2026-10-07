@@ -1,0 +1,2 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {extractResultLinks}=require('../src/application/job-board-search');
+test('job board discovery decodes DuckDuckGo wrapped links',()=>{const html='<a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwuzzuf.net%2Fjobs%2Fp%2F123">Data Entry</a>';const r=extractResultLinks(html);assert.equal(r[0].url,'https://wuzzuf.net/jobs/p/123');assert.equal(r[0].title,'Data Entry')});
