@@ -65,9 +65,43 @@ module.exports=async function handler(req,res){
 
   run=(await call({op:'transition',target:'extracting'},{token})).run;
   const groups=resolveCandidates(all.jobs);
-  const preliminary=groups.map(group=>{const independentSources=new Set(group.postings.map(p=>p.sourceId).filter(Boolean)).size;const evidenceForGroup=all.evidence.filter(ev=>group.postings.some(p=>p.canonicalKey===group.key&&p.sourceId===ev.sourceId));const evidenceConfidence=evidenceForGroup.reduce((a,ev)=>Math.max(a,ev.confidence||0),0);const sourceReliability=all.sources.filter(src=>group.postings.some(p=>src.metadata?.provider===p.sourceId)).reduce((a,src)=>Math.max(a,src.reliability||0),0);const objective=scoreOpportunity(group.representative,{sourceReliability,evidenceConfidence,independentSources});const fit=run.plan?.domain==='jobs'?scorePersonalFit(group.representative,run.preferences||{}):null;return {...group,objectiveScore:objective.score,dataQuality:objective.dataQuality,riskFlags:objective.riskFlags,fitScore:fit?.score??null,fitSignals:fit?.signals??[],scoreComponents:objective.components,sourceCount:independentSources}});
-  const evaluated=evaluateOpportunities(preliminary.map(group=>({...group.representative,canonicalKey:group.key,objectiveScore:group.objectiveScore,fitScore:group.fitScore,sourceCount:group.sourceCount})));
-  const ranked=evaluated.map(item=>{const group=preliminary.find(g=>g.key===item.canonicalKey)||preliminary.find(g=>g.representative===item);return {...group,...item,representative:{...group.representative,...item},riskFlags:[...(group.riskFlags||[]),...(item.riskProfile?.flags||[])],decisionComponents:{objective:item.objectiveScore,fit:item.fitScore,financial:item.financialScore,career:item.careerProfile?.score,risk:item.riskProfile?.score,opportunityCost:item.opportunityCost,weights:item.decisionWeights}}).filter(Boolean);const verificationTask=(run.tasks||[]).find(t=>t.task_key==='verify_cross_source');
+  const preliminary=groups.map(group=>{
+  const independentSources=new Set(group.postings.map(p=>p.sourceId).filter(Boolean)).size;
+  const evidenceForGroup=all.evidence.filter(ev=>group.postings.some(p=>p.canonicalKey===group.key&&p.sourceId===ev.sourceId));
+  const evidenceConfidence=evidenceForGroup.reduce((a,ev)=>Math.max(a,ev.confidence||0),0);
+  const sourceReliability=all.sources.filter(src=>group.postings.some(p=>src.metadata?.provider===p.sourceId)).reduce((a,src)=>Math.max(a,src.reliability||0),0);
+  const objective=scoreOpportunity(group.representative,{sourceReliability,evidenceConfidence,independentSources});
+  const fit=run.plan?.domain==='jobs'?scorePersonalFit(group.representative,run.preferences||{}):null;
+  return {...group,objectiveScore:objective.score,dataQuality:objective.dataQuality,riskFlags:objective.riskFlags,fitScore:fit?.score??null,fitSignals:fit?.signals??[],scoreComponents:objective.components,sourceCount:independentSources};
+});
+const evaluatedInput=preliminary.map(group=>({
+  ...group.representative,
+  canonicalKey:group.key,
+  objectiveScore:group.objectiveScore,
+  fitScore:group.fitScore,
+  sourceCount:group.sourceCount
+}));
+const evaluated=evaluateOpportunities(evaluatedInput);
+const ranked=evaluated.map(item=>{
+  const group=preliminary.find(g=>g.key===item.canonicalKey);
+  if(!group)return null;
+  return {
+    ...group,
+    ...item,
+    representative:{...group.representative,...item},
+    riskFlags:[...(group.riskFlags||[]),...(item.riskProfile?.flags||[])],
+    decisionComponents:{
+      objective:item.objectiveScore,
+      fit:item.fitScore,
+      financial:item.financialScore,
+      career:item.careerProfile?.score,
+      risk:item.riskProfile?.score,
+      opportunityCost:item.opportunityCost,
+      weights:item.decisionWeights
+    }
+  };
+}).filter(Boolean);
+const verificationTask=(run.tasks||[]).find(t=>t.task_key==='verify_cross_source');
   if(verificationTask?.status==='pending')await call({op:'task',taskKey:'verify_cross_source',status:'running',attempts:verificationTask.attempts||0},{token});
 
   const verified=groups.filter(g=>new Set(g.postings.map(p=>p.sourceId).filter(Boolean)).size>=2).map(g=>({
