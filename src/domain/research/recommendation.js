@@ -1,0 +1,2 @@
+function buildRecommendation({evidenceScore=0,fitScore=null,riskScore=null}={}){if(evidenceScore<60)return {status:'insufficient_evidence',decision:'unknown',reason:'Evidence quality is below the decision threshold.'};return {status:'ready',decision:fitScore===null?'needs_personalization':fitScore>=70?'recommended':'consider',fitScore,riskScore,evidenceScore}}
+module.exports={buildRecommendation};
