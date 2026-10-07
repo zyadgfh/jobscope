@@ -6,3 +6,6 @@ function createEvidence({id,claim,sourceId,retrievedAt=new Date().toISOString(),
 }
 function aggregateConfidence(items){if(!items.length)return 0;return items.reduce((s,x)=>s+x.confidence,0)/items.length}
 module.exports={STATUS,createEvidence,aggregateConfidence};
+
+const {sanitizeEvidenceStatus}=require('./evidence-policy');
+module.exports.sanitizeEvidenceStatus=sanitizeEvidenceStatus;

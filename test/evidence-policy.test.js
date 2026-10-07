@@ -1,0 +1,4 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {sanitizeEvidenceStatus}=require('../src/domain/research/evidence-policy');
+test('untrusted verified claims are downgraded to reported',()=>assert.equal(sanitizeEvidenceStatus('verified_fact',{}),'reported'));
+test('cross-source verification can remain verified_fact',()=>assert.equal(sanitizeEvidenceStatus('verified_fact',{verificationMethod:'cross_source_core_v1',independentSources:['a','b']}),'verified_fact'));
+test('invalid statuses become reported',()=>assert.equal(sanitizeEvidenceStatus('made_up',{}),'reported'));
