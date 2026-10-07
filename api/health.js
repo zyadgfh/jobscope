@@ -1,1 +1,1 @@
-module.exports = function handler(req,res){res.setHeader('cache-control','no-store');return res.status(200).json({ok:true,app:'jobscope',version:'0.2.0',runtime:'vercel'})};
+module.exports=function handler(req,res){res.setHeader('cache-control','no-store');return res.status(200).json({ok:true,app:'jobscope',version:'0.4.0',runtime:'vercel'})};
