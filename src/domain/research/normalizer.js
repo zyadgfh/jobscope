@@ -1,0 +1,3 @@
+function normalizeText(value){return String(value||'').replace(/\s+/g,' ').trim()}
+function normalizeJobCandidate(raw={}){return {title:normalizeText(raw.title),company:normalizeText(raw.company),location:normalizeText(raw.location),salary:raw.salary??null,description:normalizeText(raw.description),url:raw.url||null,sourceId:raw.sourceId||null,confidence:typeof raw.confidence==='number'?Math.max(0,Math.min(1,raw.confidence)):0}}
+module.exports={normalizeText,normalizeJobCandidate};
