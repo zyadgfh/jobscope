@@ -8,7 +8,7 @@ function extractJobPostings(html,url){
  const jobs=[];
  for(const x of collectLdJson(html).filter(isJob)){
   const inferred=parseTextSalary(x.description||html),base=salary(x.baseSalary);
-  jobs.push({title:strip(x.title),company:strip(x.hiringOrganization?.name||x.hiringOrganization),location:textLocation(x.jobLocation),salary:base||inferred,employment:{type:x.employmentType||null,datePosted:x.datePosted||null,validThrough:x.validThrough||null,directApply:x.directApply??null,workMode:x.jobLocationType==='TELECOMMUTE'?'remote':/remote/i.test(String(x.jobLocationType||''))?'remote':'onsite'},description:strip(x.description).slice(0,12000),url:x.url||url,rawData:x,confidence:base?.source==='text_pattern'?.55:.92,extraction:base?'json-ld':inferred?'json-ld+salary-text':'json-ld'});
+  jobs.push({title:strip(x.title),company:strip(x.hiringOrganization?.name||x.hiringOrganization),location:textLocation(x.jobLocation),salary:base||inferred,employment:{type:x.employmentType||null,datePosted:x.datePosted||null,validThrough:x.validThrough||null,directApply:x.directApply??null,workMode:x.jobLocationType==='TELECOMMUTE'?'remote':/remote/i.test(String(x.jobLocationType||''))?'remote':'onsite'},description:strip(x.description).slice(0,12000),url:x.url||url,rawData:x,confidence:(base?.source==='text_pattern'||inferred?.source==='text_pattern') ? .55 : .92,extraction:base?'json-ld':inferred?'json-ld+salary-text':'json-ld'});
  }
  if(jobs.length)return jobs;
  const seen=new Set(),re=/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;let m;
