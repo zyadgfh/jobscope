@@ -20,6 +20,10 @@ alter table if exists public.research_runs add column if not exists preferences_
 alter table if exists public.job_opportunities add column if not exists decision_score numeric(5,2) check(decision_score between 0 and 100);
 alter table if exists public.job_opportunities add column if not exists data_quality numeric(5,2) check(data_quality between 0 and 100);
 alter table if exists public.job_opportunities add column if not exists risk_flags jsonb not null default '[]'::jsonb;
+alter table if exists public.job_opportunities add column if not exists financial jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists career jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists decision_components jsonb not null default '{}'::jsonb;
+alter table if exists public.job_opportunities add column if not exists opportunity_cost numeric(5,2) check(opportunity_cost between 0 and 100);
 
 create table if not exists public.research_tasks (
  id bigserial primary key, run_id uuid not null references public.research_runs(id) on delete cascade,
