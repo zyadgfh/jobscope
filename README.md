@@ -38,6 +38,7 @@ npm test
 - `POST /api/research/runs/:id/pause`
 - `POST /api/research/runs/:id/resume`
 - `POST /api/research/runs/:id/cancel`
+- `GET /api/research/runs/:id/events` — SSE live timeline
 
 ## مبادئ التنفيذ
 
