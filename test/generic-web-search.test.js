@@ -1,0 +1,3 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {extractResultLinks,extractGeneralClaims}=require('../src/application/generic-web-search');
+test('extracts DuckDuckGo organic result links',()=>{const html='<a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage">Example</a>';const r=extractResultLinks(html);assert.equal(r[0].url,'https://example.com/page');assert.equal(r[0].title,'Example')});
+test('general claims remain reported',()=>{const r=extractGeneralClaims('<title>Example topic</title><meta name="description" content="A concise description">','https://example.com');assert.equal(r.length,2);assert(r.every(x=>x.status==='reported'));});
