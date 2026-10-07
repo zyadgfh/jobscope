@@ -1,0 +1,4 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {buildQueryPlan}=require('../src/domain/research/query-planner');const {scoreEvidence}=require('../src/domain/research/scoring');
+test('planner creates deterministic query families and evidence stopping rule',()=>{const p=buildQueryPlan({goal:'Data Entry',location:'Alexandria'});assert.equal(p.tasks.length,5);assert.equal(p.stopping.criterion,'evidence_sufficiency')});
+test('scoring never treats absence of evidence as a positive result',()=>{const s=scoreEvidence({evidence:[],sourceDiversity:0});assert.equal(s.score,0)});
+test('conflicts reduce evidence quality',()=>{const clean=scoreEvidence({evidence:[{status:'verified_fact',confidence:1}],sourceDiversity:1});const conflict=scoreEvidence({evidence:[{status:'verified_fact',confidence:1},{status:'conflicting',confidence:.2}],sourceDiversity:1});assert.ok(conflict.score<clean.score)});
