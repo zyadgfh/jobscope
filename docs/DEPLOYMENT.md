@@ -158,7 +158,7 @@ curl -s -X POST $BASE/api/research/runs/execute/<run-id> -H "authorization: Bear
 | --- | --- | --- |
 | مدة الدالة | 60 ثانية | `vercel.json` → `functions["api/**/*.js"].maxDuration` |
 | الذاكرة | 1024 MB | نفس الموضع |
-| المنطقة | `fra1` (أقرب خيار معتاد لمصر/الشرق الأوسط) | `vercel.json` → `regions` — عدّلها لتطابق منطقة مشروع Supabase إن أردت أقل زمن استجابة للوحة التحكم |
+| المنطقة | `fra1` | `vercel.json` → `regions`. بدائل: `dub1` (دبي، الأقرب لمصر) أو منطقة مشروع Supabase نفسها — تحقق من دعم خطتك للمنطقة قبل الاعتماد عليها، وإن رفضتها المنصة فاحذف المفتاح (تعود إلى الافتراضية `iad1`) |
 | ميزانية بحث الدفعة الواحدة | 18 ثانية افتراضيًا، بحد أقصى 30 | `src/core/time/index.js` (`DEFAULT_SEARCH_BUDGET_MS` / `MAX_SEARCH_BUDGET_MS`) |
 | حجم طلب API | 4.5 MB (حد المنصة) | Vercel؛ محليًا يفرض `src/api/node-adapter.js` سقف 512 KB |
 | حجم ingest للوحة التحكم | 3 MB للطلب و2.5 MB لحمولة `ingest` | `supabase/functions/research-control/index.ts` (`MAX_BODY`) |
