@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "foundation/**", "implementation/**"]
+    branches: ["**"]
   pull_request:
     branches: ["main"]
 
@@ -15,6 +15,5 @@ jobs:
         with:
           node-version: 24
       - run: npm test
-      - run: node --check server.js
-      - run: node --check app.js
-      - run: find api src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - run: npm run check
+      - run: node -e "require('./src/application/research-executor');require('./src/infrastructure/local-research-control');console.log('module graph ok')"

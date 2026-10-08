@@ -1,9 +1,88 @@
-const {fetchPublicSource}=require('./source-fetcher');
-const {strip,extractJobPostings}=require('../domain/research/jobposting-extractor');
-const {SOURCES}=require('../domain/research/source-registry');
-function decodeSearchUrl(raw){try{const u=new URL(raw),uddg=u.searchParams.get('uddg');return uddg?new URL(uddg).toString():u.toString()}catch{return null}}
-function extractResultLinks(html){const out=[],seen=new Set(),re=/<a[^>]+class=["'][^"']*result__a[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;let m;while((m=re.exec(html))&&out.length<12){const url=decodeSearchUrl(m[1]);if(!url)continue;try{const u=new URL(url);if(!['http:','https:'].includes(u.protocol)||/duckduckgo\.com$/i.test(u.hostname)||seen.has(u.toString()))continue;seen.add(u.toString());out.push({url:u.toString(),title:strip(m[2])})}catch{}}return out}
-async function discover(query,{domains=[],maxResults=8}={}){const constrained=domains.length?'site:'+domains[0]+' '+query:query,discoveryUrl='https://html.duckduckgo.com/html/?q='+encodeURIComponent(constrained),discovery=await fetchPublicSource(discoveryUrl,{timeoutMs:9000,maxBytes:1000000});return {discoveryUrl,discovery,links:extractResultLinks(discovery.content).filter(x=>!domains.length||domains.some(d=>{try{const h=new URL(x.url).hostname;return h===d||h.endsWith('.'+d)}catch{return false}})).slice(0,maxResults)}}
-function makeSource(url,provider,query,location,reliability){return {sourceKey:provider+':'+new URL(url).hostname,canonical_url:url,source_type:'job_board',reliability,metadata:{provider,query,location}}}
-async function searchJobBoard(query,{location='',provider,domain,maxResults=6}={}){const source=SOURCES.find(x=>x.id===provider);if(!source)throw new Error('unknown job provider');const discovered=await discover(query+(location?' '+location:''),{domains:[domain],maxResults}),sources=[{sourceKey:provider,canonical_url:'https://'+domain,source_type:'job_board',reliability:source.reliability,metadata:{provider,domain,query,location,role:'canonical_provider'}},{sourceKey:provider+':search',canonical_url:discovered.discoveryUrl,source_type:'search_engine',reliability:.6,metadata:{provider:'duckduckgo',board:provider,query,location}}],documents=[discovered.discovery],jobs=[],evidence=[];for(const link of discovered.links){try{const doc=await fetchPublicSource(link.url,{timeoutMs:8000,maxBytes:1000000,allowUnregistered:true});sources.push({...makeSource(link.url,provider,query,location,source.reliability),sourceKey:provider+':page:'+encodeURIComponent(link.url).slice(0,80)});documents.push({...doc,content:doc.content.slice(0,250000),metadata:{...(doc.metadata||{}),storedContentTruncated:doc.content.length>250000}});for(const raw of extractJobPostings(doc.content,link.url)){const jobUrl=raw.url||link.url;jobs.push({...raw,sourceId:provider,url:jobUrl,retrievedAt:doc.retrievedAt});evidence.push({claim:'Source '+source.name+' lists a job opportunity: '+(raw.title||link.title),sourceId:provider,status:'reported',confidence:raw.confidence,provenance:{url:jobUrl,retrievalMethod:'indexed_public_page',extraction:raw.extraction}})}}catch{}}return {documents,sources,jobs,evidence,links:discovered.links}}
-module.exports={discover,extractResultLinks,searchJobBoard};
+'use strict';
+const { fetchPublicSource } = require('./source-fetcher');
+const { strip, extractJobPostings } = require('../domain/research/jobposting-extractor');
+const { SOURCES } = require('../domain/research/source-registry');
+const { DISCOVERY_BASE, buildDiscoveryUrl, decodeRedirect, extractResultLinks, stripTags } = require('./duckduckgo-search');
+
+const STORED_CONTENT_LIMIT = 250000;
+
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+function matchesDomains(url, domains) {
+  if (!domains.length) return true;
+  const host = hostnameOf(url).toLowerCase();
+  return domains.some(d => host === d || host.endsWith('.' + d));
+}
+
+async function discover(query, { domains = [], maxResults = 8, timeoutMs } = {}) {
+  const constrained = domains.length ? 'site:' + domains[0] + ' ' + query : query;
+  const discoveryUrl = buildDiscoveryUrl(constrained);
+  const discovery = await fetchPublicSource(discoveryUrl, { timeoutMs: timeoutMs || 9000, maxBytes: 1000000 });
+  const links = extractResultLinks(discovery.content, { maxResults: maxResults * 2 })
+    .filter(link => matchesDomains(link.url, domains))
+    .slice(0, maxResults);
+  return { discoveryUrl, discovery, links };
+}
+
+function makeSource(url, provider, query, location, reliability) {
+  return {
+    sourceKey: provider + ':' + hostnameOf(url),
+    canonical_url: url,
+    source_type: 'job_board',
+    reliability,
+    metadata: { provider, query, location }
+  };
+}
+
+function truncateDocument(document) {
+  return {
+    ...document,
+    content: String(document.content || '').slice(0, STORED_CONTENT_LIMIT),
+    metadata: { ...(document.metadata || {}), storedContentTruncated: String(document.content || '').length > STORED_CONTENT_LIMIT }
+  };
+}
+
+async function searchJobBoard(query, { location = '', provider, domain, maxResults = 6, timeoutMs } = {}) {
+  const source = SOURCES.find(x => x.id === provider);
+  if (!source) throw Object.assign(new Error('unknown job provider'), { code: 'UNKNOWN_PROVIDER' });
+
+  const discovered = await discover([query, location].filter(Boolean).join(' '), { domains: [domain], maxResults, timeoutMs });
+  const sources = [
+    { sourceKey: provider, canonical_url: 'https://' + domain, source_type: 'job_board', reliability: source.reliability, metadata: { provider, domain, query, location, role: 'canonical_provider' } },
+    { sourceKey: provider + ':search', canonical_url: discovered.discoveryUrl, source_type: 'search_engine', reliability: .6, metadata: { provider: 'duckduckgo', board: provider, query, location } }
+  ];
+  const documents = [truncateDocument(discovered.discovery)];
+  const jobs = [];
+  const evidence = [];
+
+  for (const link of discovered.links) {
+    try {
+      const doc = await fetchPublicSource(link.url, { timeoutMs: timeoutMs || 8000, maxBytes: 1000000, allowUnregistered: true });
+      const sourceKey = provider + ':page:' + encodeURIComponent(link.url).slice(0, 80);
+      sources.push({ ...makeSource(link.url, provider, query, location, source.reliability), sourceKey });
+      documents.push(truncateDocument(doc));
+      for (const raw of extractJobPostings(doc.content, link.url)) {
+        const jobUrl = raw.url || link.url;
+        jobs.push({ ...raw, sourceId: provider, url: jobUrl, retrievedAt: doc.retrievedAt });
+        evidence.push({
+          claim: 'Source ' + source.name + ' lists a job opportunity: ' + (raw.title || link.title),
+          sourceId: provider,
+          status: 'reported',
+          confidence: raw.confidence,
+          provenance: { url: jobUrl, retrievalMethod: 'indexed_public_page', extraction: raw.extraction }
+        });
+      }
+    } catch {
+      // A single unreachable posting must not discard the rest of the batch.
+    }
+  }
+  return { documents, sources, jobs, evidence, links: discovered.links };
+}
+
+module.exports = { discover, extractResultLinks, decodeRedirect, stripTags, searchJobBoard, DISCOVERY_BASE, buildDiscoveryUrl };

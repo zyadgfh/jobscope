@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+.env
+.env.*
+!.env.example
+.jobscope-local
+test
+docs
+coverage
+*.log

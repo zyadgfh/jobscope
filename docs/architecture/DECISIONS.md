@@ -29,3 +29,21 @@ Provider integrations are adapters. No business-critical domain logic depends on
 Status: Accepted
 
 Recommendations must be traceable to evidence and confidence; model output alone is not truth.
+
+## ADR-006: Opaque capability tokens, hash-compared
+
+Status: Accepted
+
+Guest runs receive a random opaque token. Only its SHA-256 hash is stored, and authority is proven by hash comparison, never by token format. Token *shape* checks are defensive only; they must accept the format the control plane actually issues. Rejected alternatives: JWTs (an unneeded signing dependency for a capability token) and plaintext token storage.
+
+## ADR-007: Run-scoped retrieval reads
+
+Status: Accepted
+
+`sources` stays a global registry, but every read that a guest can trigger is scoped to their own run: documents carry `run_id`, and `snapshot.sources` is derived from the run's evidence, postings and documents. Rationale: a guest token must never disclose another session's retrieval trail, even when the payload itself is withheld.
+
+## ADR-008: One lifecycle table, two planes
+
+Status: Accepted
+
+Allowed state transitions live once in `src/domain/research/research-run.js` and are mirrored by the Supabase Edge Function and the local control plane. Duplicated allowlists drifted before; a single table plus mirrored tests prevents it.
