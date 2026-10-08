@@ -1,15 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jobscope://schemas/job-opportunity",
+  "title": "JobOpportunity",
+  "description": "Canonical job entity for a run. A Job Posting is one source's view of it.",
   "type": "object",
-  "required": ["id","title","company","postings"],
+  "required": ["id", "canonical_key"],
   "properties": {
-    "id":{"type":"string"},
-    "title":{"type":"string"},
-    "company":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"canonicalId":{"type":["string","null"]}}},
-    "location":{"type":["object","null"]},
-    "postings":{"type":"array","items":{"type":"object","required":["sourceId"],"properties":{"sourceId":{"type":"string"},"url":{"type":["string","null"],"format":"uri"},"firstSeenAt":{"type":["string","null"],"format":"date-time"},"lastSeenAt":{"type":["string","null"],"format":"date-time"}}}},
-    "salary":{"type":["object","null"]},
-    "confidence":{"type":"number","minimum":0,"maximum":1}
+    "id": {"type": ["string", "null"]},
+    "run_id": {"type": ["string", "null"]},
+    "canonical_key": {"type": "string", "minLength": 1},
+    "title": {"type": ["string", "null"]},
+    "company": {"type": ["string", "null"]},
+    "location": {"type": ["string", "null"]},
+    "salary": {"type": ["object", "null"]},
+    "requirements": {"type": "array"},
+    "benefits": {"type": "array"},
+    "employment": {"type": "object"},
+    "fit": {"type": ["object", "null"]},
+    "risk": {"type": ["object", "null"]},
+    "decision_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "objective_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "data_quality": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "opportunity_cost": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "risk_flags": {"type": "array"},
+    "financial": {"type": "object"},
+    "career": {"type": "object"},
+    "decision_components": {"type": "object"}
   }
 }

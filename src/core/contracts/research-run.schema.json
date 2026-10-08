@@ -1,17 +1,43 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "jobscope://schemas/research-run",
+  "title": "ResearchRun",
+  "description": "Materialized research run as returned by the control plane.",
   "type": "object",
-  "required": ["id","type","version","goalSnapshot","mode","state","createdAt","updatedAt","timeline"],
+  "required": ["id", "type", "version", "goalSnapshot", "mode", "state", "createdAt", "updatedAt"],
   "properties": {
-    "id": {"type":"string","minLength":1},
-    "type": {"const":"research_run"},
-    "version": {"type":"integer","minimum":1},
-    "goalSnapshot": {"type":"string","minLength":1},
-    "mode": {"enum":["cheap","balanced","quality","maximum"]},
-    "state": {"enum":["created","planning","searching","extracting","verifying","scoring","reporting","completed","paused","cancelled","failed"]},
-    "createdAt": {"type":"string","format":"date-time"},
-    "updatedAt": {"type":"string","format":"date-time"},
-    "timeline": {"type":"array","items":{"type":"object","required":["state","at"],"properties":{"state":{"type":"string"},"at":{"type":"string","format":"date-time"}}}}
+    "id": {"type": "string", "minLength": 1},
+    "type": {"const": "research_run"},
+    "version": {"type": "string", "minLength": 1},
+    "actorId": {"type": "string"},
+    "goal": {"type": "string"},
+    "goalSnapshot": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["cheap", "balanced", "quality", "maximum"]},
+    "state": {"enum": ["created", "planning", "searching", "extracting", "verifying", "scoring", "reporting", "completed", "paused", "cancelled", "failed"]},
+    "pausedFrom": {"type": ["string", "null"]},
+    "parentRunId": {"type": ["string", "null"]},
+    "revision": {"type": "integer", "minimum": 1},
+    "preferences": {"type": "object"},
+    "plan": {"type": ["object", "null"]},
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_key", "task_type", "status"],
+        "properties": {
+          "task_key": {"type": "string", "minLength": 1},
+          "task_type": {"type": "string"},
+          "query": {"type": ["string", "null"]},
+          "status": {"enum": ["pending", "running", "completed", "failed", "blocked_manual"]},
+          "attempts": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "opportunities": {"type": "array"},
+    "evidenceSummary": {"type": "object"},
+    "recommendation": {"type": ["object", "null"]},
+    "report": {"type": ["object", "null"]},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "updatedAt": {"type": "string", "format": "date-time"}
   }
 }

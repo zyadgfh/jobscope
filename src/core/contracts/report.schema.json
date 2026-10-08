@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jobscope://schemas/report",
+  "title": "Report",
+  "description": "Decision report. Scores are evidence quality only; personal fit requires preferences.",
+  "type": "object",
+  "required": ["version", "runId", "generatedAt", "executive", "opportunities", "claims"],
+  "properties": {
+    "version": {"type": "string", "minLength": 1},
+    "runId": {"type": ["string", "null"]},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "executive": {
+      "type": "object",
+      "required": ["recommendation", "evidenceCount", "sourceCount"],
+      "properties": {
+        "recommendation": {"type": "object", "required": ["status"]},
+        "evidenceCount": {"type": "integer", "minimum": 0},
+        "sourceCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "evidenceScore": {"type": ["object", "null"]},
+    "stopping": {"type": ["object", "null"]},
+    "gaps": {"type": "array"},
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "sourceCount"],
+        "properties": {
+          "key": {"type": ["string", "null"]},
+          "decisionScore": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+          "fitScore": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+          "sourceCount": {"type": "integer", "minimum": 0},
+          "riskFlags": {"type": "array"}
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim", "status", "confidence"],
+        "properties": {
+          "claim": {"type": "string"},
+          "status": {"enum": ["verified_fact", "reported", "estimated", "inferred", "unknown", "conflicting"]},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    }
+  }
+}

@@ -1,8 +1,19 @@
 {
   "name": "jobscope",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Bilingual deep research workspace for jobs and any topic",
-  "scripts": {"start":"node server.js","dev":"node server.js","test":"node --test"},
-  "engines": {"node":">=20"}
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test",
+    "check": "find api src test scripts -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "deploy:check": "node scripts/check-control-plane.js",
+    "postinstall": "node -e \"console.log('JobScope: no dependencies to install')\"",
+    "verify:deploy": "node scripts/verify-deployment.js"
+  },
+  "engines": {
+    "node": "22.x"
+  }
 }

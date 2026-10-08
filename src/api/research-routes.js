@@ -1,81 +1,72 @@
-const { URL } = require('node:url');
+'use strict';
+const { createNodeHandler } = require('./node-adapter');
+const { applySecurityHeaders } = require('./security-headers');
 
-function json(res, status, payload) {
-  const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
-  });
-  res.end(body);
+// The same entry points Vercel deploys (`api/**`), so `npm start` and production
+// cannot drift. Thin `api/**` files delegate to shared cores in `api/_shared/`.
+const createRun = require('../../api/research/runs/index.js');
+const runById = require('../../api/research/runs/[id].js');
+const executeRun = require('../../api/research/runs/execute/[id].js');
+const executeRoot = require('../../api/research/runs/execute/index.js');
+const runEvidence = require('../../api/research/runs/[id]/evidence.js');
+const exportRun = require('../../api/research/runs/[id]/export.js');
+const fetchSource = require('../../api/research/sources/fetch.js');
+const health = require('../../api/health.js');
+
+// URL shapes mirror the deployed file layout exactly:
+//   api/research/runs/index.js          -> POST /api/research/runs
+//   api/research/runs/execute/[id].js   -> POST /api/research/runs/execute/:id
+//   api/research/runs/execute/index.js  -> POST /api/research/runs/execute (id is in the token)
+//   api/research/runs/[id].js           -> GET|POST /api/research/runs/:id
+//   api/research/runs/[id]/evidence.js  -> POST /api/research/runs/:id/evidence
+//   api/research/runs/[id]/export.js    -> GET  /api/research/runs/:id/export
+//   api/research/sources/fetch.js       -> POST /api/research/sources/fetch
+const ROUTES = [
+  { method: 'GET', pattern: /^\/(api\/)?health$/, handler: health, url: '/api/health' },
+  { method: 'POST', pattern: /^\/api\/research\/runs$/, handler: createRun, url: '/api/research/runs' },
+  { method: 'POST', pattern: /^\/api\/research\/runs\/execute\/[^/]+$/, handler: executeRun, url: '/api/research/runs/execute/:id' },
+  { method: 'POST', pattern: /^\/api\/research\/runs\/execute$/, handler: executeRoot, url: '/api/research/runs/execute' },
+  { method: 'POST', pattern: /^\/api\/research\/runs\/[^/]+\/evidence$/, handler: runEvidence, url: '/api/research/runs/:id/evidence' },
+  { method: 'GET', pattern: /^\/api\/research\/runs\/[^/]+\/export$/, handler: exportRun, url: '/api/research/runs/:id/export' },
+  { method: 'GET', pattern: /^\/api\/research\/runs\/[^/]+$/, handler: runById, url: '/api/research/runs/:id' },
+  { method: 'POST', pattern: /^\/api\/research\/runs\/[^/]+$/, handler: runById, url: '/api/research/runs/:id' },
+  { method: 'POST', pattern: /^\/api\/research\/sources\/fetch$/, handler: fetchSource, url: '/api/research/sources/fetch' }
+];
+
+function isApiPath(pathname) {
+  return pathname === '/health' || pathname.startsWith('/api/');
 }
 
-async function readJson(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  if (!chunks.length) return {};
-  const raw = Buffer.concat(chunks).toString('utf8');
-  if (raw.length > 256 * 1024) throw Object.assign(new Error('payload too large'), { code: 'PAYLOAD_TOO_LARGE' });
-  try { return JSON.parse(raw); }
-  catch { throw Object.assign(new Error('invalid JSON'), { code: 'INVALID_JSON' }); }
+function findRoute(method, pathname) {
+  return ROUTES.find(route => route.method === method && route.pattern.test(pathname)) || null;
 }
 
-function streamEvents(res, service, id) {
-  res.writeHead(200, {
-    'content-type': 'text/event-stream; charset=utf-8',
-    'cache-control': 'no-cache, no-transform',
-    connection: 'keep-alive',
-    'x-accel-buffering': 'no'
-  });
-  const run = service.get(id);
-  if (!run) return res.end();
-  res.write(`event: snapshot\ndata: ${JSON.stringify(run)}\n\n`);
-  const unsubscribe = service.subscribe(id, event => {
-    res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-  });
-  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
-  res.on('close', () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
+function routeFor(pathname, method = 'GET') {
+  return findRoute(method, pathname);
 }
 
-function registerResearchRoutes(server, service) {
+function registerResearchRoutes(server) {
+  const handlers = new Map();
+  for (const route of ROUTES) {
+    if (!handlers.has(route.handler)) handlers.set(route.handler, createNodeHandler(route.handler));
+  }
+
   server.on('request', async (req, res) => {
-    if (!req.url?.startsWith('/api/research/')) return;
-    const url = new URL(req.url, 'http://localhost');
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    if (!isApiPath(url.pathname)) return;
 
-    try {
-      if (req.method === 'POST' && url.pathname === '/api/research/runs') {
-        const body = await readJson(req);
-        const run = service.create({
-          goal: body.goal,
-          mode: body.mode || 'balanced',
-          actorId: body.actorId || 'guest'
-        });
-        return json(res, 201, run);
-      }
+    applySecurityHeaders(res);
+    res.setHeader('cache-control', 'no-store');
 
-      const match = url.pathname.match(/^\/api\/research\/runs\/([^/]+)(?:\/(pause|resume|cancel|events))?$/);
-      if (match) {
-        const [, id, action] = match;
-        if (req.method === 'GET' && action === 'events') return streamEvents(res, service, id);
-        if (req.method === 'GET' && !action) {
-          const run = service.get(id);
-          return run ? json(res, 200, run) : json(res, 404, { error: 'NOT_FOUND' });
-        }
-        if (req.method === 'POST' && action) {
-          const run = service[action](id);
-          return run ? json(res, 200, run) : json(res, 404, { error: 'NOT_FOUND' });
-        }
-      }
-      return json(res, 404, { error: 'NOT_FOUND' });
-    } catch (error) {
-      const status = error.code === 'PAYLOAD_TOO_LARGE' ? 413 :
-        error.code === 'INVALID_JSON' ? 400 :
-        error.code === 'INVALID_STATE_TRANSITION' ? 409 : 400;
-      return json(res, status, { error: error.code || 'BAD_REQUEST', message: error.message });
+    // HEAD is answered like GET (Node drops the body itself), which is how the
+    // platform treats header probes.
+    const route = findRoute(req.method === 'HEAD' ? 'GET' : req.method, url.pathname);
+    if (!route) {
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ error: 'NOT_FOUND' }));
     }
+    return handlers.get(route.handler)(req, res);
   });
 }
 
-module.exports = { registerResearchRoutes };
+module.exports = { registerResearchRoutes, findRoute, routeFor, ROUTES, isApiPath };

@@ -1,57 +1,94 @@
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const { InMemoryResearchRunStore } = require('./src/infrastructure/research-store');
-const { ResearchService } = require('./src/application/research-service');
-const { registerResearchRoutes } = require('./src/api/research-routes');
+'use strict';
+// Local development runs the in-process control plane unless a real URL is set,
+// so `npm start` exercises the full request lifecycle without cloud credentials.
+if (!process.env.RESEARCH_CONTROL_URL) process.env.RESEARCH_CONTROL_URL = 'local';
 
-const port = Number(process.env.PORT || 3000);
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { registerResearchRoutes } = require('./src/api/research-routes');
+const { applySecurityHeaders } = require('./src/api/security-headers');
+const { version } = require('./package.json');
+
 const root = __dirname;
-const mime = {
+
+const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml'
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8'
 };
 
-const store = new InMemoryResearchRunStore();
-const research = new ResearchService(store);
+// Explicit allowlist instead of "serve the whole repository".
+const STATIC_FILES = new Map([
+  ['/', 'index.html'],
+  ['/index.html', 'index.html'],
+  ['/app.js', 'app.js'],
+  ['/styles.css', 'styles.css'],
+  ['/robots.txt', 'robots.txt'],
+  ['/favicon.ico', 'favicon.ico']
+]);
+const STATIC_PREFIXES = ['/assets/', '/public/'];
 
-const server = http.createServer((req, res) => {
-  if (req.url?.startsWith('/api/research/')) return;
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+function resolveStatic(pathname) {
+  const mapped = STATIC_FILES.get(pathname);
+  if (mapped) return path.join(root, mapped);
+  const prefix = STATIC_PREFIXES.find(candidate => pathname.startsWith(candidate));
+  if (!prefix) return null;
+  const relative = decodeURIComponent(pathname.slice(1));
+  const candidate = path.normalize(path.join(root, relative));
+  const base = path.resolve(root, prefix.slice(1, -1)) + path.sep;
+  if (!candidate.startsWith(base)) return null;
+  return candidate;
+}
 
-  if (url.pathname === '/health') {
+function createServer() {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    // Mirrors vercel.json (`cleanUrls: true`, `trailingSlash: false`) so a path that
+    // works in production behaves the same locally.
+    const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') || '/' : url.pathname;
+    if (pathname === '/health' || pathname.startsWith('/api/')) return;
+
+    const file = resolveStatic(pathname);
+    if (!file || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      return res.end('Not found');
+    }
+
+    applySecurityHeaders(res);
     res.writeHead(200, {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-      'x-frame-options': 'DENY',
-      'referrer-policy': 'no-referrer'
+      'content-type': MIME[path.extname(file)] || 'application/octet-stream',
+      'cache-control': 'no-cache'
     });
-    return res.end(JSON.stringify({ ok: true, app: 'jobscope', version: '0.2.0' }));
-  }
-
-  const requested = url.pathname === '/' ? '/index.html' : url.pathname;
-  const file = path.normalize(path.join(root, requested));
-  if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    return res.end('Not found');
-  }
-
-  res.writeHead(200, {
-    'content-type': mime[path.extname(file)] || 'application/octet-stream',
-    'cache-control': 'no-cache',
-    'x-content-type-options': 'nosniff',
-    'x-frame-options': 'DENY',
-    'referrer-policy': 'strict-origin-when-cross-origin'
+    fs.createReadStream(file).pipe(res);
   });
-  fs.createReadStream(file).pipe(res);
-});
 
-registerResearchRoutes(server, research);
+  registerResearchRoutes(server);
+  return server;
+}
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`JobScope listening on 0.0.0.0:${port}`);
-});
+function start(port = Number(process.env.PORT || 3000)) {
+  const server = createServer();
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '0.0.0.0', () => {
+      const mode = process.env.RESEARCH_CONTROL_URL === 'local' ? 'in-process control plane' : process.env.RESEARCH_CONTROL_URL;
+      console.log(`JobScope v${version} listening on 0.0.0.0:${server.address().port} (${mode})`);
+      resolve(server);
+    });
+  });
+}
+
+if (require.main === module) {
+  start().catch(error => {
+    console.error('JobScope failed to start:', error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { createServer, start, STATIC_FILES };
