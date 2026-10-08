@@ -133,7 +133,18 @@ curl -s -X POST $BASE/api/research/runs/execute/<run-id> -H "authorization: Bear
 - أي هدف شبكة خاصة (`http://127.0.0.1/`) يجب أن يعيد `SSRF_BLOCKED`.
 - عند تعذّر الوصول إلى الويب من بيئة التشغيل، تظهر المهام `failed` مع سببها ويُسجَّل `source_failure` كـ gap — لا تُلفَّق نتائج.
 
-سكربت التحقق كاملًا: `npm run deploy:check` (يتطلب `RESEARCH_CONTROL_URL`).
+### سكربت تحقق واحد
+
+بدل تنفيذ الأوامر أعلاه يدويًا:
+
+```bash
+BASE=https://<your-project>.vercel.app npm run verify:deploy
+# أو: node scripts/verify-deployment.js https://<your-project>.vercel.app
+```
+
+يفحص: `/health` وحقوله، رؤوس الأمان وCSP، `no-store` على `/api`، رفض الطلبات المجهولة (401) على ثلاث مسارات، ميزانية الدفعة في الخطة، حاجز SSRF، ثم دورة حقيقية إنشاء → قراءة → دفعات حتى `completed` → تصدير، ويطبع جدول ✓/✗ ويخرج بكود 1 عند أي فشل صلب. استخدم `--quick` لتخطي حلقة الدفعات.
+
+ولفحص لوحة التحكم وحدها (المستوى الأعمق): `npm run deploy:check` (يتطلب `RESEARCH_CONTROL_URL`).
 
 ---
 

@@ -40,6 +40,7 @@ JobScope نواة تنفيذية **تعمل فعليًا من طرف إلى طر
 وبعد النشر:
 
     RESEARCH_CONTROL_URL=https://YOUR_PROJECT.supabase.co/functions/v1/research-control npm run deploy:check
+    BASE=https://YOUR_PROJECT.vercel.app npm run verify:deploy     # فحص شامل للموقع والـ API
 
 متغيرات البيئة المطلوبة ومصفوفتها كاملة، وخطوات الاستيراد من GitHub، والتحقق بعد النشر، واستكشاف الأخطاء، والتراجع: `docs/DEPLOYMENT.md`.
 نشر آلي جاهز في `.github/workflows/deploy-vercel.yml` (يُفعَّل بإضافة أسرار `VERCEL_TOKEN` و`VERCEL_ORG_ID` و`VERCEL_PROJECT_ID`).

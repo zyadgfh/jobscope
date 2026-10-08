@@ -15,6 +15,7 @@
 - `vercel.json`: security headers + CSP for every route, `Cache-Control: no-store` for `/api/**`, `functions["api/**/*.js"]` = 60 s / 1024 MB, region `fra1`.
 - `docs/DEPLOYMENT.md`: environment matrix, Supabase migration + Edge Function steps, post-deploy verification, limits, troubleshooting and rollback.
 - `scripts/check-control-plane.js` (`npm run deploy:check`): real `create → get → snapshot → revoke` probe against the deployed control plane, with run-scoped-retrieval and contract-version warnings.
+- `scripts/verify-deployment.js` (`npm run verify:deploy`): one-command post-deploy verification of a live URL (health, security headers, `no-store`, 401s, SSRF guard, batch budget, create → execute → completed → export).
 - `.github/workflows/deploy-vercel.yml`: automated production deploy that skips itself (with a notice) until the Vercel secrets exist.
 - `.vercelignore`, `.env.example` matrix, `engines.node` pinned to the verified `22.x`.
 
