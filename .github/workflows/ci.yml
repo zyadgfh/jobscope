@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
       - run: npm test
       - run: npm run check
       - run: node -e "require('./src/application/research-executor');require('./src/infrastructure/local-research-control');console.log('module graph ok')"

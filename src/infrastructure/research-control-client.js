@@ -14,11 +14,12 @@ function isPlausibleToken(token) {
   return TOKEN_PATTERN.test(normalizeToken(token));
 }
 
-async function call(body, { token = '', timeoutMs = 12000 } = {}) {
+async function call(body, { token = '', timeoutMs = 12000, ip = '' } = {}) {
   const clean = normalizeToken(token);
+  // The in-process plane mirrors the deployed Edge Function operation for operation,
+  // so both transports return the same payload shape.
   if (isLocalControl) {
-    const result = localControlRequest(body, clean);
-    return result.payload;
+    return localControlRequest(body, clean, { ip }).payload;
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -27,7 +28,10 @@ async function call(body, { token = '', timeoutMs = 12000 } = {}) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(clean ? { authorization: 'Bearer ' + clean } : {})
+        ...(clean ? { authorization: 'Bearer ' + clean } : {}),
+        // The Edge Function rate-limits per visitor; without this header every
+        // deployment would share one bucket.
+        ...(ip ? { 'x-forwarded-for': ip } : {})
       },
       redirect: 'error',
       body: JSON.stringify(body),

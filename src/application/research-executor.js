@@ -9,6 +9,7 @@ const { scoreOpportunity } = require('../domain/research/opportunity-scoring');
 const { scorePersonalFit } = require('../domain/research/profile-scoring');
 const { evaluateOpportunities } = require('../domain/research/decision-engine');
 const { detectGaps, buildExpansionQueries } = require('../domain/research/gap-detection');
+const { searchBudgetMs, DEFAULT_SEARCH_BUDGET_MS } = require('../core/time');
 
 const SEARCH_TYPES = new Set(['search', 'search_web']);
 const TERMINAL_STATES = ['completed', 'cancelled', 'failed'];
@@ -59,6 +60,10 @@ function rebuildJobs(snapshot = {}) {
 
 function sourceKeyOf(row = {}) {
   return row?.metadata?.provider || row?.canonical_url || row?.id || null;
+}
+
+function batchBudget(run) {
+  return searchBudgetMs(run?.plan?.execution?.searchBudgetMs ?? DEFAULT_SEARCH_BUDGET_MS);
 }
 
 function expansionBounds(run) {
@@ -125,9 +130,10 @@ async function runSearchTask(run, task, token, search) {
   await call({ op: 'task', taskKey: task.task_key, status: 'running', attempts: task.attempts || 0 }, { token });
   try {
     const location = run.plan?.intent?.location || '';
+    const timeBudgetMs = searchBudgetMs(run.plan?.execution?.searchBudgetMs);
     const result = provider === 'duckduckgo'
-      ? await search.web(task.query, { location, maxResults: 3 })
-      : await search.jobs(task.query, { location, sourceIds: [provider] });
+      ? await search.web(task.query, { location, maxResults: 3, timeBudgetMs })
+      : await search.jobs(task.query, { location, sourceIds: [provider], timeBudgetMs });
     await call({
       op: 'ingest',
       sources: result.sources || [],
@@ -216,6 +222,13 @@ async function finalizeRun(run, token) {
     }
   }
   if (verificationClaims.length) await call({ op: 'ingest', evidence: verificationClaims }, { token });
+  // The cross-source check lives in this function, so the verification task is
+  // completed here instead of hanging as "pending" forever.
+  for (const task of run.tasks || []) {
+    if (task.task_type === 'verification' && task.status === 'pending') {
+      await call({ op: 'task', taskKey: task.task_key, status: 'completed' }, { token });
+    }
+  }
 
   const allEvidence = (await call({ op: 'snapshot' }, { token })).evidence?.map(normalizeEvidenceRow) || evidence;
   const sourceDiversity = new Set(allEvidence.map(e => e.sourceId).filter(Boolean)).size;
@@ -372,6 +385,7 @@ async function executeBatch(token, options = {}) {
 
 module.exports = {
   executeBatch,
+  batchBudget,
   providerFor,
   rebuildJobs,
   normalizeEvidenceRow,

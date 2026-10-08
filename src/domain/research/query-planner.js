@@ -1,17 +1,21 @@
 'use strict';
 
+const { DEFAULT_SEARCH_BUDGET_MS } = require('../../core/time');
+
 function normalizeGoal(goal) {
   return String(goal || '').trim().replace(/\s+/g, ' ');
 }
 
 // Execution bounds are part of the plan so that the executor, the API and the
 // tests share a single source of truth for how far expansion may go.
-function buildExecution({ depth = 'auto', domain = 'jobs' } = {}) {
+function buildExecution({ depth = 'auto', domain = 'jobs', searchBudgetMs } = {}) {
   const deep = depth === 'deep';
   return {
     depth: deep ? 'deep' : 'auto',
     maxExpansionRounds: deep ? 2 : 1,
     maxExpansionTasks: deep ? 5 : 3,
+    // Keeps one checkpointed batch inside the serverless function duration limit.
+    searchBudgetMs: searchBudgetMs || DEFAULT_SEARCH_BUDGET_MS,
     batch: 'checkpointed',
     domain
   };

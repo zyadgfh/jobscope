@@ -5,10 +5,10 @@ const WINDOW_MS=60000,MAX_CREATE_PER_WINDOW=5,MAX_BODY=3000000;
 const limits=new Map<string,{at:number,count:number}>(), protectedLimits=new Map<string,{at:number,count:number}>(), ALLOWED_EVIDENCE=new Set(["verified_fact","reported","estimated","inferred","unknown","conflicting"]);
 const STATES=new Set(["created","planning","searching","extracting","verifying","scoring","reporting","completed","paused","cancelled","failed"]);
 const EDGES=new Map<string,Set<string>>([
-["created",new Set(["planning","cancelled"])],["planning",new Set(["searching","paused","cancelled","failed"])],
+["created",new Set(["planning","paused","cancelled"])],["planning",new Set(["searching","paused","cancelled","failed"])],
 ["searching",new Set(["extracting","paused","cancelled","failed"])],["extracting",new Set(["verifying","paused","cancelled","failed"])],
 ["verifying",new Set(["scoring","paused","cancelled","failed"])],["scoring",new Set(["reporting","paused","cancelled","failed"])],
-["reporting",new Set(["completed","paused","cancelled","failed"])],["paused",new Set(["planning","searching","extracting","verifying","scoring","reporting","cancelled","failed"])],
+["reporting",new Set(["completed","paused","cancelled","failed"])],["paused",new Set(["created","planning","searching","extracting","verifying","scoring","reporting","cancelled","failed"])],
 ["completed",new Set([])],["cancelled",new Set([])],["failed",new Set(["planning","cancelled"])]]);
 
 const json=(d:any,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});

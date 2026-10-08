@@ -2,14 +2,14 @@ const STATES = Object.freeze(['created','planning','searching','extracting','ver
 // The allowed edges are mirrored verbatim by the Supabase Edge Function and the
 // local control plane, so a run cannot drift between environments.
 const TRANSITIONS = Object.freeze({
- created:['planning','cancelled'],
+ created:['planning','paused','cancelled'],
  planning:['searching','paused','cancelled','failed'],
  searching:['extracting','paused','cancelled','failed'],
  extracting:['verifying','paused','cancelled','failed'],
  verifying:['scoring','paused','cancelled','failed'],
  scoring:['reporting','paused','cancelled','failed'],
  reporting:['completed','paused','cancelled','failed'],
- paused:['planning','searching','extracting','verifying','scoring','reporting','cancelled','failed'],
+ paused:['created','planning','searching','extracting','verifying','scoring','reporting','cancelled','failed'],
  completed:[],
  cancelled:[],
  failed:['planning','cancelled']

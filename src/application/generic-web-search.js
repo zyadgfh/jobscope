@@ -2,6 +2,7 @@
 const { fetchPublicSource } = require('./source-fetcher');
 const { strip } = require('../domain/research/jobposting-extractor');
 const { DISCOVERY_BASE, buildDiscoveryUrl, extractResultLinks } = require('./duckduckgo-search');
+const { createBudget, searchBudgetMs } = require('../core/time');
 
 const STORED_CONTENT_LIMIT = 200000;
 
@@ -22,7 +23,8 @@ function truncateDocument(document) {
   };
 }
 
-async function searchWeb(query, { location = '', maxResults = 3, timeoutMs } = {}) {
+async function searchWeb(query, { location = '', maxResults = 3, timeoutMs, timeBudgetMs } = {}) {
+  const budget = createBudget(searchBudgetMs(timeBudgetMs));
   const combined = [query, location].filter(Boolean).join(' ');
   const discoveryUrl = buildDiscoveryUrl(combined);
   const discovery = await fetchPublicSource(discoveryUrl, { timeoutMs: timeoutMs || 9000, maxBytes: 1000000 });
@@ -38,20 +40,32 @@ async function searchWeb(query, { location = '', maxResults = 3, timeoutMs } = {
   const documents = [truncateDocument(discovery)];
   const evidence = [];
 
-  const pages = await Promise.all(links.map(async link => {
-    try {
-      const doc = await fetchPublicSource(link.url, { timeoutMs: timeoutMs || 8000, maxBytes: 1000000, allowUnregistered: true });
-      const sourceKey = 'page:' + link.url;
-      sources.push({ sourceKey, canonical_url: link.url, source_type: 'web', reliability: .5, metadata: { provider: 'web_public', discoveredBy: 'duckduckgo', query, location, title: link.title } });
-      documents.push(truncateDocument(doc));
-      return extractGeneralClaims(doc.content, link.url).map(claim => ({ ...claim, sourceId: sourceKey }));
-    } catch {
-      return [];
+  // Page fetches run in a small window so a slow page cannot stretch the batch,
+  // and the shared budget stops the loop once it is spent.
+  const queue = [...links];
+  let skipped = 0;
+  const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+    while (queue.length) {
+      if (budget.expired()) {
+        skipped += queue.length;
+        queue.length = 0;
+        return;
+      }
+      const link = queue.shift();
+      try {
+        const doc = await fetchPublicSource(link.url, { timeoutMs: timeoutMs || 8000, maxBytes: 1000000, allowUnregistered: true });
+        const sourceKey = 'page:' + link.url;
+        sources.push({ sourceKey, canonical_url: link.url, source_type: 'web', reliability: .5, metadata: { provider: 'web_public', discoveredBy: 'duckduckgo', query, location, title: link.title } });
+        documents.push(truncateDocument(doc));
+        evidence.push(...extractGeneralClaims(doc.content, link.url).map(claim => ({ ...claim, sourceId: sourceKey })));
+      } catch {
+        // A single unreachable page must not discard the rest of the batch.
+      }
     }
-  }));
-  for (const list of pages) evidence.push(...list);
+  });
+  await Promise.all(workers);
 
-  return { sources, documents, evidence, links };
+  return { sources, documents, evidence, links, budgetExhausted: skipped > 0, skippedLinks: skipped };
 }
 
 module.exports = { searchWeb, extractResultLinks, extractGeneralClaims, DISCOVERY_BASE, buildDiscoveryUrl };

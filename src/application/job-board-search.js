@@ -3,6 +3,7 @@ const { fetchPublicSource } = require('./source-fetcher');
 const { strip, extractJobPostings } = require('../domain/research/jobposting-extractor');
 const { SOURCES } = require('../domain/research/source-registry');
 const { DISCOVERY_BASE, buildDiscoveryUrl, decodeRedirect, extractResultLinks, stripTags } = require('./duckduckgo-search');
+const { createBudget, searchBudgetMs } = require('../core/time');
 
 const STORED_CONTENT_LIMIT = 250000;
 
@@ -48,7 +49,8 @@ function truncateDocument(document) {
   };
 }
 
-async function searchJobBoard(query, { location = '', provider, domain, maxResults = 6, timeoutMs } = {}) {
+async function searchJobBoard(query, { location = '', provider, domain, maxResults = 4, timeoutMs, timeBudgetMs } = {}) {
+  const budget = createBudget(searchBudgetMs(timeBudgetMs));
   const source = SOURCES.find(x => x.id === provider);
   if (!source) throw Object.assign(new Error('unknown job provider'), { code: 'UNKNOWN_PROVIDER' });
 
@@ -61,7 +63,12 @@ async function searchJobBoard(query, { location = '', provider, domain, maxResul
   const jobs = [];
   const evidence = [];
 
+  let skipped = 0;
   for (const link of discovered.links) {
+    if (budget.expired()) {
+      skipped = discovered.links.length - (documents.length - 1);
+      break;
+    }
     try {
       const doc = await fetchPublicSource(link.url, { timeoutMs: timeoutMs || 8000, maxBytes: 1000000, allowUnregistered: true });
       const sourceKey = provider + ':page:' + encodeURIComponent(link.url).slice(0, 80);
@@ -82,7 +89,15 @@ async function searchJobBoard(query, { location = '', provider, domain, maxResul
       // A single unreachable posting must not discard the rest of the batch.
     }
   }
-  return { documents, sources, jobs, evidence, links: discovered.links };
+  return {
+    documents,
+    sources,
+    jobs,
+    evidence,
+    links: discovered.links,
+    budgetExhausted: skipped > 0,
+    skippedLinks: Math.max(0, skipped)
+  };
 }
 
 module.exports = { discover, extractResultLinks, decodeRedirect, stripTags, searchJobBoard, DISCOVERY_BASE, buildDiscoveryUrl };

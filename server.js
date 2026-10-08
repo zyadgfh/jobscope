@@ -49,9 +49,12 @@ function resolveStatic(pathname) {
 function createServer() {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    if (url.pathname === '/health' || url.pathname.startsWith('/api/')) return;
+    // Mirrors vercel.json (`cleanUrls: true`, `trailingSlash: false`) so a path that
+    // works in production behaves the same locally.
+    const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') || '/' : url.pathname;
+    if (pathname === '/health' || pathname.startsWith('/api/')) return;
 
-    const file = resolveStatic(url.pathname);
+    const file = resolveStatic(pathname);
     if (!file || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       return res.end('Not found');

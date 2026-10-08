@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — Vercel deploy readiness
+
+### Runtime
+
+- Pausing a run that has not started yet is now legal (`created ↔ paused`), mirrored by the Edge Function; finalization marks the `verify_*` task completed instead of leaving it pending.
+- The visitor IP is forwarded to the control plane (`x-forwarded-for`), so the create rate limit is per visitor instead of one global bucket.
+- **Per-batch search budget** (`src/core/time/index.js`): every retrieval pass is bounded (`DEFAULT_SEARCH_BUDGET_MS` 18 s, `MAX_SEARCH_BUDGET_MS` 30 s) and reports `budgetExhausted`/`skippedLinks` instead of letting one slow provider consume the whole serverless invocation. The plan carries `execution.searchBudgetMs`; `batchBudget(run)` clamps it into the safe window.
+- Provider failures are no longer silently swallowed: a failed search provider throws (`PROVIDER_FAILED`) and the run records a `source_failure` gap.
+- `/health` is reachable at the root via a `vercel.json` rewrite; `cleanUrls`/`trailingSlash` behaviour is mirrored by the local server, and `HEAD` is answered like `GET`.
+
+### Deployment
+
+- `vercel.json`: security headers + CSP for every route, `Cache-Control: no-store` for `/api/**`, `functions["api/**/*.js"]` = 60 s / 1024 MB, region `fra1`.
+- `docs/DEPLOYMENT.md`: environment matrix, Supabase migration + Edge Function steps, post-deploy verification, limits, troubleshooting and rollback.
+- `scripts/check-control-plane.js` (`npm run deploy:check`): real `create → get → snapshot → revoke` probe against the deployed control plane, with run-scoped-retrieval and contract-version warnings.
+- `.github/workflows/deploy-vercel.yml`: automated production deploy that skips itself (with a notice) until the Vercel secrets exist.
+- `.vercelignore`, `.env.example` matrix, `engines.node` pinned to the verified `22.x`.
+
+### Tests
+
+- New `test/production-path.test.js` drives the real HTTP transport: single `Bearer` prefix on the wire, a full run completing over HTTP against a live control-plane listener, error status/code mapping (401/400), and budget clamping.
+- New `test/budget.test.js` covers budget expiry, invalid values and the serverless-safe window; `test/time-budget.test.js` proves a slow board/page window really is cut off and reports the dropped links.
+- New `test/control-plane-parity.test.js` reads the Edge Function source and asserts the local plane, the operation surface, the error codes, the limits and the lifecycle table still match production.
+- `test/control-plane.test.js` also covers store migration (a store written by an older build is normalised instead of crashing).
+- Suite: **108 tests, all passing** (`npm test`).
+
 ## 0.9.0 — repair release
 
 Full audit (`jobscope-review.md`) followed by fixes across the executable path, security and hygiene.

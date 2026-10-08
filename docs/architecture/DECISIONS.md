@@ -47,3 +47,11 @@ Status: Accepted
 Status: Accepted
 
 Allowed state transitions live once in `src/domain/research/research-run.js` and are mirrored by the Supabase Edge Function and the local control plane. Duplicated allowlists drifted before; a single table plus mirrored tests prevents it.
+
+## ADR-009: One checkpointed batch per serverless invocation
+
+Status: Accepted
+
+A Vercel function is bounded (60 s in `vercel.json`), so the executor never tries to finish a run in one request. `POST /api/research/runs/execute/:id` performs **one** unit of work — a search task, an expansion task, or finalization — persists the run through the control plane, and returns `{ run, continue, phase }`. The browser loops until `continue === false`, and every intermediate state is durable, so a refresh resumes from storage instead of restarting.
+
+Retrieval inside a batch is bounded by a budget (`src/core/time/index.js`: 18 s default, 30 s maximum) that is clamped on the server (`batchBudget`), not trusted from the client. Providers stop fetching once it is spent and report `budgetExhausted`/`skippedLinks`, which surfaces as a `source_failure`/coverage gap rather than a timeout. Rationale: a bounded batch keeps the request inside the function limit, and a visible gap is more honest than a silently truncated result set.

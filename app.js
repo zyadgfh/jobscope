@@ -125,14 +125,13 @@ function sourceState(run,key){
  return 'completed';
 }
 function renderSources(run){
- const tasks=(run&&run.tasks)||[];
- const used=new Set(tasks.map(task=>task.status==='completed'?(SOURCE_MAP.find(s=>sourceState(run,s.key)==='completed')||{}).key:null).filter(Boolean));
+ const used=SOURCE_MAP.filter(source=>sourceState(run,source.key)==='completed').length;
  $('#sourceList').innerHTML=SOURCE_MAP.map(source=>{
   const state=sourceState(run,source.key);
   const stateClass=state==='completed'||state==='blocked_manual'?'source-state done':'source-state';
   return '<div class="source" id="src-'+esc(source.key)+'"><div class="source-icon">'+esc(source.icon)+'</div><div class="source-info"><b>'+esc(source.title)+'</b><small>'+esc(lang==='ar'?source.ar:source.en)+'</small></div><span class="'+stateClass+'">'+esc(taskLabel(state))+'</span></div>';
  }).join('');
- $('#sourceCount').textContent=String(used.size);
+ $('#sourceCount').textContent=String(used);
 }
 function renderSignals(run){
  const summary=(run&&run.evidenceSummary)||{};

@@ -1,75 +1,280 @@
 'use strict';
+
+/*
+ * In-process control plane.
+ *
+ * This is a faithful local mirror of the deployed Supabase Edge Function
+ * (`supabase/functions/research-control/index.ts`): the same operations, payload
+ * shapes, error codes and state-machine edges, plus the same run-scoped snapshots,
+ * hashed opaque tokens and evidence gate. It exists so `npm start`, the test suite
+ * and `scripts/check-control-plane.js` exercise the production contract without a
+ * cloud project; production always uses the Edge Function.
+ *
+ * Guarded by test/control-plane-parity.test.js.
+ */
+
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const crypto = require('node:crypto');
-
-/*
- * In-process control plane mirroring supabase/functions/research-control.
- * It exists so `npm start` runs the real request lifecycle without cloud
- * credentials, and so integration tests can exercise the production code path.
- */
+const { TRANSITIONS } = require('../domain/research/research-run');
+const { sanitizeEvidenceStatus } = require('../domain/research/evidence-policy');
 
 const STORE_PATH = process.env.JOBSCOPE_LOCAL_STORE || path.join(os.tmpdir(), 'jobscope-local-control.json');
-const { STATES: LIFECYCLE_STATES, TRANSITIONS } = require('../domain/research/research-run');
-const STATES = new Set(LIFECYCLE_STATES);
-const EDGES = new Map(Object.entries(TRANSITIONS).map(([from, to]) => [from, new Set(to)]));
-const ALLOWED_EVIDENCE = new Set(['verified_fact', 'reported', 'estimated', 'inferred', 'unknown', 'conflicting']);
-const MAX_PAYLOAD = 2500000;
+const WINDOW_MS = 60 * 1000;
+const MAX_CREATE_PER_WINDOW = 5;
+const MAX_PROTECTED_PER_WINDOW = 180;
+const MAX_INGEST_BYTES = 2500000;
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RUN_VERSION = '1.3';
+const MODES = new Set(['cheap', 'balanced', 'quality', 'maximum']);
+const WORK_MODES = new Set(['any', 'onsite', 'hybrid', 'remote']);
+const RELATIONS = new Set(['supports', 'contradicts', 'corroborates', 'duplicates']);
 
-const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
-const makeToken = () => crypto.randomBytes(32).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const nowIso = () => new Date().toISOString();
+// Same helper as the Edge Function: trim, collapse whitespace, cap length.
 const clean = (value, max = 2000) => String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+const nowIso = () => new Date().toISOString();
+const newId = () => crypto.randomUUID();
+const hashToken = token => crypto.createHash('sha256').update(String(token)).digest('hex');
+const makeToken = () => crypto.randomBytes(32).toString('base64url');
 
-function fail(error, status = 400) {
-  return Object.assign(new Error(String(error)), { code: error, status });
+function fail(code, message, status = 400) {
+  return Object.assign(new Error(message), { code, status });
 }
 
-function emptyStore() {
-  return { runs: {}, tasks: {}, evidence: [], sources: [], documents: [], opportunities: [], postings: [] };
+function emptyState() {
+  return {
+    runs: [],
+    tasks: [],
+    sources: [],
+    documents: [],
+    evidence: [],
+    relations: [],
+    opportunities: [],
+    postings: [],
+    events: [],
+    createWrites: []
+  };
 }
 
-let store = null;
+let cache = null;
+
+// A store written by an older build may key runs by id (object) instead of an
+// array, or miss collections entirely. Normalise instead of crashing.
+function normalizeStore(raw) {
+  const state = Object.assign(emptyState(), raw && typeof raw === 'object' ? raw : {});
+  if (!Array.isArray(state.runs)) {
+    state.runs = state.runs && typeof state.runs === 'object' ? Object.values(state.runs) : [];
+  }
+  for (const key of Object.keys(emptyState())) {
+    if (!Array.isArray(state[key])) state[key] = [];
+  }
+  return state;
+}
 
 function load() {
-  if (store) return store;
+  if (cache) return cache;
   try {
-    store = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-    for (const key of Object.keys(emptyStore())) if (!(key in store)) store[key] = emptyStore()[key];
+    cache = normalizeStore(JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')));
   } catch {
-    store = emptyStore();
+    cache = emptyState();
   }
-  return store;
+  return cache;
 }
 
-function persist() {
+// Re-read the store from disk (used after an external write, e.g. a migration).
+function reload() {
+  cache = null;
+  return load();
+}
+
+function save() {
+  if (!cache) return;
   try {
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store));
+    fs.writeFileSync(STORE_PATH, JSON.stringify(cache));
   } catch {
-    // Local persistence is a convenience; a read-only filesystem must not break requests.
+    // A read-only filesystem must never break execution.
   }
+}
+
+// Tests create many runs from one process; production keys the limit per visitor.
+function resetLimits() {
+  createLimits.clear();
+  protectedLimits.clear();
 }
 
 function reset() {
-  store = emptyStore();
-  persist();
+  cache = emptyState();
+  createLimits.clear();
+  protectedLimits.clear();
+  save();
 }
 
-function tasksOf(runId) {
-  return load().tasks[runId] || [];
+function bucket(map, key, limit) {
+  const now = Date.now();
+  const entry = map.get(key) || { at: now, count: 0 };
+  if (now - entry.at >= WINDOW_MS) {
+    entry.at = now;
+    entry.count = 0;
+  }
+  entry.count += 1;
+  map.set(key, entry);
+  if (map.size > 10000) map.clear();
+  return entry.count > limit;
+}
+
+const createLimits = new Map();
+const protectedLimits = new Map();
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+function tasksFor(runId) {
+  return load().tasks.filter(task => task.run_id === runId);
+}
+
+function findRun(id) {
+  return load().runs.find(run => run.id === id) || null;
+}
+
+function findRunByToken(token) {
+  if (!token) return null;
+  const hash = hashToken(token);
+  return load().runs.find(run => run.access_token_hash && run.access_token_hash === hash) || null;
+}
+
+function preferencesOf(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const minSalary = Number(source.minSalary);
+  const preferences = {
+    minSalary: minSalary > 0 ? minSalary : null,
+    targetLocations: Array.isArray(source.targetLocations)
+      ? source.targetLocations.map(item => clean(item, 120)).filter(Boolean).slice(0, 20)
+      : [],
+    requiredKeywords: Array.isArray(source.requiredKeywords)
+      ? source.requiredKeywords.map(item => clean(item, 120)).filter(Boolean).slice(0, 30)
+      : [],
+    workMode: WORK_MODES.has(source.workMode) ? source.workMode : 'any'
+  };
+  const meaningful = preferences.minSalary
+    || preferences.targetLocations.length
+    || preferences.requiredKeywords.length
+    || preferences.workMode !== 'any';
+  return { preferences, meaningful };
+}
+
+function insertRun({ goal, mode, plan, preferences, parentRunId = null, state = 'created', revision = 1 }) {
+  const state_ = load();
+  const timestamp = nowIso();
+  const run = {
+    id: newId(),
+    actor_id: 'guest',
+    goal,
+    goal_snapshot: goal,
+    mode,
+    state,
+    plan,
+    preferences,
+    preferences_expires_at: null,
+    access_token_hash: null,
+    token_expires_at: null,
+    paused_from: null,
+    parent_run_id: parentRunId,
+    revision,
+    recommendation: null,
+    report: null,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+  state_.runs.push(run);
+  return run;
+}
+
+function issueToken(run) {
+  const access = makeToken();
+  run.access_token_hash = hashToken(access);
+  run.token_expires_at = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
+  return access;
+}
+
+function seedTasks(run, tasks) {
+  const state = load();
+  for (const task of tasks) {
+    if (!task) continue;
+    state.tasks.push({
+      id: newId(),
+      run_id: run.id,
+      task_key: clean(task.id, 120),
+      task_type: clean(task.type, 80),
+      query: clean(task.query, 2000),
+      status: 'pending',
+      depends_on: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+      attempts: 0,
+      started_at: null,
+      completed_at: null,
+      last_error: null
+    });
+  }
+}
+
+function logEvent(runId, eventType, state, payload) {
+  load().events.push({ id: newId(), run_id: runId, event_type: eventType, state, payload, created_at: nowIso() });
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots (run-scoped, exactly like the Edge Function)
+// ---------------------------------------------------------------------------
+
+function evidenceSummary(runId) {
+  const evidence = load().evidence.filter(row => row.run_id === runId);
+  const byStatus = { verified_fact: 0, reported: 0, estimated: 0, inferred: 0, unknown: 0, conflicting: 0 };
+  for (const row of evidence) byStatus[row.status] = (byStatus[row.status] || 0) + 1;
+  return {
+    total: evidence.length,
+    byStatus,
+    sourceCount: new Set(evidence.map(row => row.source_id).filter(Boolean)).size,
+    averageConfidence: evidence.length
+      ? Number((evidence.reduce((sum, row) => sum + Number(row.confidence || 0), 0) / evidence.length).toFixed(3))
+      : 0
+  };
+}
+
+const OPPORTUNITY_FIELDS = [
+  'canonical_key', 'title', 'company', 'location', 'salary', 'requirements', 'benefits', 'employment',
+  'fit', 'risk', 'decision_score', 'data_quality', 'risk_flags', 'financial', 'career',
+  'decision_components', 'opportunity_cost'
+];
+
+function pickOpportunity(row) {
+  const picked = { id: row.id };
+  for (const field of OPPORTUNITY_FIELDS) picked[field] = row[field] ?? null;
+  return picked;
 }
 
 function materialize(run) {
-  const db = load();
-  const evidence = db.evidence.filter(e => e.run_id === run.id);
-  const totals = {};
-  for (const item of evidence) totals[item.status] = (totals[item.status] || 0) + 1;
+  const state = load();
+  const tasks = tasksFor(run.id).map(task => ({
+    task_key: task.task_key,
+    task_type: task.task_type,
+    query: task.query,
+    status: task.status,
+    depends_on: task.depends_on,
+    attempts: task.attempts,
+    last_error: task.last_error,
+    started_at: task.started_at,
+    completed_at: task.completed_at
+  }));
+  const opportunities = state.opportunities
+    .filter(row => row.run_id === run.id)
+    .map(pickOpportunity)
+    .sort((a, b) => Number(b.decision_score ?? -1) - Number(a.decision_score ?? -1));
+  const preferencesExpired = run.preferences_expires_at && new Date(run.preferences_expires_at) <= new Date();
   return {
     id: run.id,
     type: 'research_run',
-    version: '1.3',
+    version: RUN_VERSION,
     actorId: run.actor_id,
     goal: run.goal,
     goalSnapshot: run.goal_snapshot,
@@ -78,222 +283,205 @@ function materialize(run) {
     pausedFrom: run.paused_from || null,
     parentRunId: run.parent_run_id || null,
     revision: run.revision || 1,
-    preferences: run.preferences || {},
+    preferences: preferencesExpired ? {} : (run.preferences || {}),
     plan: run.plan,
-    tasks: tasksOf(run.id).map(t => ({
-      task_key: t.task_key,
-      task_type: t.task_type,
-      query: t.query,
-      status: t.status,
-      attempts: t.attempts,
-      last_error: t.last_error || null
-    })),
-    opportunities: db.opportunities.filter(o => o.run_id === run.id),
-    evidenceSummary: {
-      total: evidence.length,
-      byStatus: totals,
-      sourceCount: new Set(evidence.map(e => e.source_id).filter(Boolean)).size,
-      averageConfidence: evidence.length ? Number((evidence.reduce((a, e) => a + Number(e.confidence || 0), 0) / evidence.length).toFixed(3)) : 0
-    },
-    recommendation: run.recommendation || null,
-    report: run.report || null,
+    tasks,
+    opportunities,
+    evidenceSummary: evidenceSummary(run.id),
+    recommendation: run.recommendation,
+    report: run.report,
     createdAt: run.created_at,
     updatedAt: run.updated_at
   };
 }
 
-function findRun(token) {
-  if (!token) return null;
-  const wanted = hash(token);
-  const run = Object.values(load().runs).find(r => r.access_token_hash === wanted);
-  if (!run) return null;
-  if (run.token_expires_at && new Date(run.token_expires_at) <= new Date()) return null;
-  return run;
-}
-
-function newRun({ goal, mode, plan, preferences, parent = null, revision = 1, token }) {
-  const db = load();
-  const id = crypto.randomUUID();
-  const timestamp = nowIso();
-  const prefs = normalizePreferences(preferences);
-  const expires = new Date(Date.now() + 7 * 86400000).toISOString();
-  const hasPrefs = prefs.minSalary || prefs.targetLocations.length || prefs.requiredKeywords.length || prefs.workMode !== 'any';
-  const run = {
-    id,
-    actor_id: 'guest',
-    goal,
-    goal_snapshot: goal,
-    mode,
-    state: 'created',
-    paused_from: null,
-    parent_run_id: parent?.id || null,
-    revision,
-    plan,
-    preferences: prefs,
-    preferences_expires_at: hasPrefs ? expires : null,
-    access_token_hash: hash(token),
-    token_expires_at: expires,
-    recommendation: null,
-    report: null,
-    created_at: timestamp,
-    updated_at: timestamp
-  };
-  db.runs[id] = run;
-  db.tasks[id] = [];
-  return run;
-}
-
-function normalizePreferences(input = {}) {
-  const raw = input && typeof input === 'object' ? input : {};
-  const minSalary = Number(raw.minSalary);
-  return {
-    minSalary: Number.isFinite(minSalary) && minSalary > 0 ? minSalary : null,
-    targetLocations: Array.isArray(raw.targetLocations) ? raw.targetLocations.map(x => clean(x, 120)).filter(Boolean).slice(0, 20) : [],
-    requiredKeywords: Array.isArray(raw.requiredKeywords) ? raw.requiredKeywords.map(x => clean(x, 120)).filter(Boolean).slice(0, 30) : [],
-    workMode: ['any', 'onsite', 'hybrid', 'remote'].includes(raw.workMode) ? raw.workMode : 'any'
-  };
-}
-
-function createRun(body) {
-  const goal = clean(body.goal);
-  if (!goal) throw fail('INVALID_GOAL', 400);
-  const mode = ['cheap', 'balanced', 'quality', 'maximum'].includes(body.mode) ? body.mode : 'balanced';
-  const plan = body.plan && typeof body.plan === 'object' ? body.plan : { version: '1.0', tasks: [] };
-  const token = makeToken();
-  const run = newRun({ goal, mode, plan, preferences: body.preferences, token });
-  const db = load();
-  db.tasks[run.id] = (Array.isArray(plan.tasks) ? plan.tasks : []).map(t => ({
-    run_id: run.id,
-    task_key: clean(t.id, 120),
-    task_type: clean(t.type, 80),
-    query: clean(t.query, 2000),
-    status: 'pending',
-    depends_on: Array.isArray(t.dependsOn) ? t.dependsOn : [],
-    attempts: 0,
-    last_error: null
-  }));
-  persist();
-  return { status: 201, payload: { run: materialize(run), accessToken: token } };
-}
-
-function snapshot(run) {
-  const db = load();
-  const evidence = db.evidence.filter(e => e.run_id === run.id)
-    .map(e => ({ id: e.id, source_id: e.source_id, claim: e.claim, status: e.status, confidence: e.confidence, provenance: e.provenance, retrieved_at: e.retrieved_at }));
-  const opportunities = db.opportunities.filter(o => o.run_id === run.id);
-  const postings = db.postings.filter(p => opportunities.some(o => o.id === p.opportunity_id));
-
-  // Run-scoped sources and documents: a guest token must never disclose another
-  // session's retrieval trail.
-  const sourceIds = new Set([
-    ...evidence.map(e => e.source_id),
-    ...postings.map(p => p.source_id),
-    ...db.documents.filter(d => d.run_id === run.id).map(d => d.source_id)
-  ].filter(Boolean));
-  const sources = db.sources.filter(s => sourceIds.has(s.id))
-    .map(s => ({ id: s.id, canonical_url: s.canonical_url, source_type: s.source_type, reliability: s.reliability, metadata: s.metadata }));
-  const documents = db.documents.filter(d => d.run_id === run.id)
-    .map(d => ({ id: d.id, source_id: d.source_id, canonical_url: d.canonical_url, title: d.title, content_type: d.content_type, content_hash: d.content_hash, retrieval_method: d.retrieval_method, retrieved_at: d.retrieved_at, metadata: d.metadata }));
-
+function snapshotPayload(run) {
+  const state = load();
+  const evidence = state.evidence
+    .filter(row => row.run_id === run.id)
+    .map(row => ({
+      id: row.id,
+      source_id: row.source_id,
+      claim: row.claim,
+      status: row.status,
+      confidence: row.confidence,
+      provenance: row.provenance,
+      retrieved_at: row.retrieved_at
+    }));
+  const opportunities = state.opportunities.filter(row => row.run_id === run.id).map(pickOpportunity);
+  const opportunityIds = new Set(opportunities.map(row => row.id));
+  const postings = state.postings.filter(row => opportunityIds.has(row.opportunity_id));
+  const documents = state.documents
+    .filter(row => row.run_id === run.id)
+    .slice(0, 100)
+    .map(row => ({
+      id: row.id,
+      source_id: row.source_id,
+      canonical_url: row.canonical_url,
+      title: row.title,
+      content_type: row.content_type,
+      content_hash: row.content_hash,
+      retrieval_method: row.retrieval_method,
+      retrieved_at: row.retrieved_at,
+      metadata: row.metadata
+    }));
+  const sourceIds = [...new Set([
+    ...evidence.map(row => row.source_id),
+    ...postings.map(row => row.source_id),
+    ...documents.map(row => row.source_id)
+  ].filter(Boolean))];
+  const sources = state.sources
+    .filter(row => sourceIds.includes(row.id))
+    .map(row => ({
+      id: row.id,
+      canonical_url: row.canonical_url,
+      source_type: row.source_type,
+      reliability: row.reliability,
+      metadata: row.metadata
+    }));
   return { run: materialize(run), evidence, sources, opportunities, postings, documents };
 }
 
-function transition(run, body) {
-  let target = clean(body.target, 40);
-  if (target === 'resume' && run.state === 'paused') target = run.paused_from || 'planning';
-  if (!STATES.has(target) || !(EDGES.get(run.state) || new Set()).has(target)) {
-    throw fail('INVALID_STATE_TRANSITION', 409);
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+function create(body, clientIp = 'local') {
+  if (bucket(createLimits, clientIp, MAX_CREATE_PER_WINDOW)) {
+    throw fail('RATE_LIMITED', 'too many runs created in the last minute', 429);
   }
-  if (target === 'paused') run.paused_from = run.state;
-  if (run.state === 'paused' && target !== 'paused') run.paused_from = null;
-  run.state = target;
-  run.updated_at = nowIso();
-  persist();
-  return { payload: { run: materialize(run) } };
+  const goal = clean(body?.goal);
+  if (!goal) throw fail('INVALID_GOAL', 'a research goal is required', 400);
+  const mode = MODES.has(body?.mode) ? body.mode : 'balanced';
+  const plan = body?.plan && typeof body.plan === 'object' ? body.plan : { version: '1.0', tasks: [] };
+  const { preferences, meaningful } = preferencesOf(body?.preferences);
+
+  const run = insertRun({ goal, mode, plan, preferences });
+  if (meaningful) run.preferences_expires_at = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
+  const accessToken = issueToken(run);
+  seedTasks(run, Array.isArray(plan.tasks) ? plan.tasks : []);
+  logEvent(run.id, 'run.created', 'created', { actor: 'guest', mode });
+  save();
+  return { status: 201, payload: { run: materialize(run), accessToken } };
 }
 
-function taskOp(run, body) {
-  const db = load();
-  const list = db.tasks[run.id] || (db.tasks[run.id] = []);
-  const key = clean(body.taskKey, 120);
-  let task = list.find(t => t.task_key === key);
-  if (!task && body.createIfMissing) {
+function authorize(token) {
+  if (bucket(protectedLimits, 'p:' + String(token).slice(0, 80), MAX_PROTECTED_PER_WINDOW)) {
+    throw fail('RATE_LIMITED', 'too many control-plane calls for this token', 429);
+  }
+  const run = findRunByToken(token);
+  if (!run || !run.access_token_hash || new Date(run.token_expires_at) <= new Date()) {
+    throw fail('UNAUTHORIZED', 'unknown, expired or revoked access token', 401);
+  }
+  return run;
+}
+
+function transition(run, requested) {
+  let target = clean(requested, 40);
+  if (target === 'resume' && run.state === 'paused') target = run.paused_from || 'planning';
+  const allowed = TRANSITIONS[run.state] || [];
+  if (!allowed.includes(target)) {
+    throw fail('INVALID_STATE_TRANSITION', `${run.state} -> ${target}`, 409);
+  }
+  run.paused_from = target === 'paused' ? run.state : (run.state === 'paused' && target !== 'paused' ? null : run.paused_from);
+  run.state = target;
+  run.updated_at = nowIso();
+  logEvent(run.id, 'run.state_changed', target, { previousState: run.state });
+  save();
+  return { status: 200, payload: { run: materialize(run) } };
+}
+
+function taskUpdate(run, body) {
+  const key = clean(body?.taskKey, 120);
+  const status = clean(body?.status, 30);
+  let task = tasksFor(run.id).find(row => row.task_key === key) || null;
+  if (!task && body?.createIfMissing) {
     task = {
+      id: newId(),
       run_id: run.id,
       task_key: key,
       task_type: clean(body.taskType || 'search', 80),
       query: clean(body.query || '', 2000),
-      status: clean(body.status || 'pending', 30),
-      depends_on: [],
+      status,
+      depends_on: Array.isArray(body.dependsOn) ? body.dependsOn : [],
       attempts: Number(body.attempts || 0),
+      started_at: null,
+      completed_at: null,
       last_error: null
     };
-    list.push(task);
+    load().tasks.push(task);
   }
-  if (task) {
-    if (body.status) task.status = clean(body.status, 30);
-    if (body.status === 'running') task.attempts = Number(body.attempts || 0) + 1;
-    else if (body.attempts !== undefined) task.attempts = Number(body.attempts || 0);
-    if (body.error) task.last_error = clean(body.error, 1000);
+  if (!task) throw fail('TASK_NOT_FOUND', `unknown task: ${key}`, 404);
+  task.status = status;
+  if (status === 'running') {
+    task.started_at = nowIso();
+    task.attempts = Number(body.attempts || 0) + 1;
   }
-  persist();
-  return { payload: { task: task || null } };
+  if (['completed', 'failed'].includes(status)) task.completed_at = nowIso();
+  if (body?.error) task.last_error = clean(body.error, 1000);
+  run.updated_at = nowIso();
+  save();
+  return { status: 200, payload: { task } };
+}
+
+function ingestSources(run, rows) {
+  const state = load();
+  const map = {};
+  for (const source of (rows || []).slice(0, 20)) {
+    const url = clean(source.canonical_url, 500);
+    if (!url) continue;
+    let record = state.sources.find(row => row.canonical_url === url) || null;
+    if (record) {
+      record.last_seen_at = nowIso();
+      record.reliability = Number(source.reliability ?? record.reliability ?? 0.5);
+      record.metadata = source.metadata || record.metadata || {};
+    } else {
+      record = {
+        id: newId(),
+        canonical_url: url,
+        source_type: clean(source.source_type, 80),
+        reliability: Number(source.reliability ?? 0.5),
+        metadata: source.metadata || {},
+        first_seen_at: nowIso(),
+        last_seen_at: nowIso()
+      };
+      state.sources.push(record);
+    }
+    map[source.sourceKey || source.metadata?.provider || url] = record.id;
+  }
+  return map;
 }
 
 function ingest(run, body) {
-  if (JSON.stringify(body).length > MAX_PAYLOAD) throw fail('PAYLOAD_TOO_LARGE', 413);
-  const db = load();
-  const sourceMap = {};
-
-  for (const input of (Array.isArray(body.sources) ? body.sources : []).slice(0, 20)) {
-    const url = clean(input.canonical_url, 500);
-    if (!url) continue;
-    let row = db.sources.find(s => s.canonical_url === url);
-    if (row) {
-      row.last_seen_at = nowIso();
-      row.reliability = Number(input.reliability ?? row.reliability ?? 0.5);
-      row.metadata = input.metadata || row.metadata || {};
-    } else {
-      row = {
-        id: crypto.randomUUID(),
-        canonical_url: url,
-        source_type: clean(input.source_type, 80),
-        reliability: Number(input.reliability ?? 0.5),
-        first_seen_at: nowIso(),
-        last_seen_at: nowIso(),
-        metadata: input.metadata || {}
-      };
-      db.sources.push(row);
-    }
-    sourceMap[input.sourceKey || input.metadata?.provider || url] = row.id;
+  if (JSON.stringify(body).length > MAX_INGEST_BYTES) {
+    throw fail('PAYLOAD_TOO_LARGE', 'ingest payload is too large', 413);
   }
+  const state = load();
+  const documents = Array.isArray(body.documents) ? body.documents.slice(0, 50) : [];
+  const jobs = Array.isArray(body.jobs) ? body.jobs.slice(0, 150) : [];
+  const evidence = Array.isArray(body.evidence) ? body.evidence.slice(0, 400) : [];
+  const sourceMap = ingestSources(run, body.sources);
 
-  for (const document of (Array.isArray(body.documents) ? body.documents : []).slice(0, 50)) {
-    const url = clean(document.url, 500);
-    if (!url) continue;
-    const contentHash = clean(document.contentHash, 128);
-    const content = String(document.content || '').slice(0, 1000000);
-    const existing = db.documents.find(d => d.canonical_url === url && d.content_hash === contentHash);
-    if (existing) continue;
-    db.documents.push({
-      id: crypto.randomUUID(),
+  for (const document of documents) {
+    state.documents.push({
+      id: newId(),
       run_id: run.id,
       source_id: sourceMap[document.sourceId] || null,
-      canonical_url: url,
+      canonical_url: clean(document.url, 500),
       title: clean(document.title, 500),
       content_type: clean(document.contentType, 120),
-      content_hash: contentHash,
-      content,
+      content_hash: clean(document.contentHash, 128),
+      content: String(document.content || '').slice(0, 1000000),
       retrieval_method: clean(document.retrievalMethod || 'http', 80),
       retrieved_at: document.retrievedAt || nowIso(),
       metadata: document.metadata || {}
     });
   }
 
-  for (const job of (Array.isArray(body.jobs) ? body.jobs : []).slice(0, 150)) {
+  for (const job of jobs) {
     const key = clean(job.canonicalKey, 500);
     if (!key) continue;
-    let opportunity = db.opportunities.find(o => o.run_id === run.id && o.canonical_key === key);
+    let opportunity = state.opportunities.find(row => row.run_id === run.id && row.canonical_key === key) || null;
     const fields = {
       title: clean(job.title, 500),
       company: clean(job.company, 500),
@@ -302,136 +490,195 @@ function ingest(run, body) {
       requirements: job.requirements || [],
       benefits: job.benefits || [],
       employment: job.employment || {},
+      fit: job.fit ?? null,
       risk: job.risk ?? null,
       decision_score: job.decisionScore ?? null,
-      objective_score: job.objectiveScore ?? null,
       data_quality: job.dataQuality ?? null,
       risk_flags: job.riskFlags || [],
-      fit: job.fit ?? null,
       financial: job.financial || {},
       career: job.career || {},
       decision_components: job.decisionComponents || {},
-      opportunity_cost: job.opportunityCost ?? null
+      opportunity_cost: job.opportunityCost ?? null,
+      updated_at: nowIso()
     };
-    if (!opportunity) {
-      opportunity = { id: crypto.randomUUID(), run_id: run.id, canonical_key: key, created_at: nowIso(), ...fields };
-      db.opportunities.push(opportunity);
+    if (opportunity) {
+      for (const [field, value] of Object.entries(fields)) {
+        if (value !== null && value !== undefined && !(Array.isArray(value) && !value.length)) opportunity[field] = value;
+      }
     } else {
-      Object.assign(opportunity, Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null && v !== undefined)));
+      opportunity = { id: newId(), run_id: run.id, canonical_key: key, created_at: nowIso(), ...fields };
+      state.opportunities.push(opportunity);
     }
-    const postingUrl = clean(job.url, 500);
-    if (postingUrl && !db.postings.some(p => p.opportunity_id === opportunity.id && p.canonical_url === postingUrl)) {
-      db.postings.push({
-        id: crypto.randomUUID(),
+    if (job.url) {
+      state.postings.push({
+        id: newId(),
         opportunity_id: opportunity.id,
         source_id: sourceMap[job.sourceId] || null,
-        canonical_url: postingUrl,
+        canonical_url: clean(job.url, 500),
         raw_data: job.rawData || {},
         retrieved_at: job.retrievedAt || nowIso()
       });
     }
   }
 
-  for (const item of (Array.isArray(body.evidence) ? body.evidence : []).slice(0, 400)) {
-    const requested = ALLOWED_EVIDENCE.has(item.status) ? item.status : 'reported';
-    const provenance = item.provenance && typeof item.provenance === 'object' ? item.provenance : {};
-    const trusted = requested === 'verified_fact'
-      && provenance.verificationMethod === 'cross_source_core_v1'
-      && Array.isArray(provenance.independentSources)
-      && provenance.independentSources.length >= 2;
-    db.evidence.push({
-      id: crypto.randomUUID(),
+  const inserted = [];
+  for (const row of evidence) {
+    const provenance = row.provenance && typeof row.provenance === 'object' ? row.provenance : {};
+    const record = {
+      id: newId(),
       run_id: run.id,
-      source_id: sourceMap[item.sourceId] || null,
-      claim: clean(item.claim, 2000),
-      status: trusted ? 'verified_fact' : (requested === 'verified_fact' ? 'reported' : requested),
-      confidence: Math.max(0, Math.min(1, Number(item.confidence ?? 0))),
+      source_id: sourceMap[row.sourceId] || null,
+      claim: clean(row.claim, 2000),
+      // The same gate the Edge Function applies.
+      status: sanitizeEvidenceStatus(row.status, provenance),
+      confidence: Number(Math.max(0, Math.min(1, row.confidence ?? 0))),
       provenance,
-      retrieved_at: item.retrievedAt || nowIso()
-    });
+      retrieved_at: row.retrievedAt || nowIso()
+    };
+    state.evidence.push(record);
+    inserted.push(record);
+  }
+
+  const relations = Array.isArray(body.relations) ? body.relations.slice(0, 500) : [];
+  if (relations.length) {
+    const byKey = new Map(inserted
+      .filter(record => record.provenance?.evidenceKey)
+      .map(record => [record.provenance.evidenceKey, record.id]));
+    for (const relation of relations) {
+      const from = byKey.get(relation.evidenceKey);
+      const to = byKey.get(relation.relatedEvidenceKey);
+      if (!from || !to || !RELATIONS.has(relation.relation)) continue;
+      state.relations.push({ id: newId(), run_id: run.id, evidence_id: from, related_evidence_id: to, relation: relation.relation });
+    }
   }
 
   if (body.recommendation || body.report) {
-    if (body.recommendation) run.recommendation = body.recommendation;
-    if (body.report) run.report = body.report;
-    run.updated_at = nowIso();
+    run.recommendation = body.recommendation || run.recommendation;
+    run.report = body.report || run.report;
   }
-  persist();
-  return { payload: { run: materialize(run) } };
+  run.updated_at = nowIso();
+  logEvent(run.id, 'research.ingested', run.state, {
+    sources: (body.sources || []).length,
+    documents: documents.length,
+    jobs: jobs.length,
+    evidence: evidence.length,
+    relations: relations.length
+  });
+  save();
+  return { status: 200, payload: { run: materialize(run) } };
 }
 
-function compare(run, body) {
-  const db = load();
-  const other = findRun(clean(body.otherToken, 300));
-  if (!other) throw fail('OTHER_RUN_UNAUTHORIZED', 401);
-  const left = db.opportunities.filter(o => o.run_id === run.id);
-  const right = db.opportunities.filter(o => o.run_id === other.id);
-  const keys = [...new Set([...left.map(o => o.canonical_key), ...right.map(o => o.canonical_key)])];
+function revoke(run) {
+  run.access_token_hash = null;
+  run.token_expires_at = nowIso();
+  run.updated_at = nowIso();
+  save();
+  return { status: 200, payload: { ok: true } };
+}
+
+function spawnChild(run, op, preferences) {
+  const { preferences: prefs, meaningful } = preferencesOf(preferences);
+  const child = insertRun({
+    goal: run.goal,
+    mode: run.mode,
+    plan: run.plan,
+    preferences: Object.keys(prefs).length ? prefs : run.preferences,
+    parentRunId: run.id,
+    revision: (run.revision || 1) + 1
+  });
+  if (meaningful || run.preferences_expires_at) child.preferences_expires_at = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
+  const accessToken = issueToken(child);
+  for (const task of tasksFor(run.id)) {
+    load().tasks.push({
+      id: newId(),
+      run_id: child.id,
+      task_key: task.task_key,
+      task_type: task.task_type,
+      query: task.query,
+      status: 'pending',
+      depends_on: task.depends_on || [],
+      attempts: 0,
+      started_at: null,
+      completed_at: null,
+      last_error: null
+    });
+  }
+  logEvent(child.id, 'run.created', 'created', { actor: 'guest', parentRunId: run.id, reason: op });
+  save();
+  return { status: 201, payload: { run: materialize(child), accessToken } };
+}
+
+function compare(run, otherToken) {
+  const other = findRunByToken(clean(otherToken, 300));
+  if (!other) throw fail('OTHER_RUN_UNAUTHORIZED', 'the comparison token is unknown, expired or revoked', 401);
+  const left = materialize(run);
+  const right = materialize(other);
+  const leftOps = new Map(left.opportunities.map(row => [row.canonical_key, row]));
+  const rightOps = new Map(right.opportunities.map(row => [row.canonical_key, row]));
+  const keys = [...new Set([...leftOps.keys(), ...rightOps.keys()])];
+  const row = (source, id, state, opportunities) => ({
+    id,
+    state,
+    evidenceScore: source.report?.evidenceScore || null,
+    opportunities: opportunities.length
+  });
   return {
+    status: 200,
     payload: {
-      left: { id: run.id, state: run.state, evidenceScore: run.report?.evidenceScore?.score ?? null, opportunities: left.length },
-      right: { id: other.id, state: other.state, evidenceScore: other.report?.evidenceScore?.score ?? null, opportunities: right.length },
+      left: row(run, run.id, run.state, left.opportunities),
+      right: row(other, other.id, other.state, right.opportunities),
       opportunityDiff: keys.map(key => ({
         canonicalKey: key,
-        left: left.find(o => o.canonical_key === key) || null,
-        right: right.find(o => o.canonical_key === key) || null
+        left: leftOps.get(key) || null,
+        right: rightOps.get(key) || null
       }))
     }
   };
 }
 
-function branch(run, body) {
-  const db = load();
-  if (body.op === 'retry' && run.state !== 'failed') throw fail('RETRY_REQUIRES_FAILED_RUN', 409);
-  const token = makeToken();
-  const child = newRun({
-    goal: run.goal,
-    mode: run.mode,
-    plan: run.plan,
-    preferences: body.preferences || run.preferences,
-    parent: run,
-    revision: (run.revision || 1) + 1,
-    token
-  });
-  db.tasks[child.id] = (db.tasks[run.id] || []).map(t => ({ ...t, run_id: child.id, status: 'pending', attempts: 0, last_error: null }));
-  persist();
-  return { status: 201, payload: { run: materialize(child), accessToken: token } };
-}
+// ---------------------------------------------------------------------------
+// Dispatch (identical operation surface to the Edge Function)
+// ---------------------------------------------------------------------------
 
-function localControlRequest(body = {}, token = '') {
-  const db = load();
-  if (body.op === 'create') return createRun(body);
-
-  const run = findRun(token);
-  if (!run) throw fail('UNAUTHORIZED', 401);
-
-  switch (body.op) {
+function localControlRequest(body, token, meta = {}) {
+  const op = clean(body?.op, 40);
+  if (op === 'create') return create(body, meta.ip || 'local');
+  const run = authorize(clean(token, 300));
+  switch (op) {
     case 'get':
-      return { payload: { run: materialize(run) } };
+      return { status: 200, payload: { run: materialize(run) } };
     case 'snapshot':
-      return { payload: snapshot(run) };
+      return { status: 200, payload: snapshotPayload(run) };
     case 'transition':
-      return transition(run, body);
+      return transition(run, body.target);
     case 'task':
-      return taskOp(run, body);
+      return taskUpdate(run, body);
     case 'ingest':
       return ingest(run, body);
+    case 'revoke':
+      return revoke(run);
     case 'compare':
-      return compare(run, body);
+      return compare(run, body.otherToken);
     case 'fork':
+      return spawnChild(run, 'fork', body.preferences);
     case 'replay':
+      return spawnChild(run, 'replay', body.preferences);
     case 'retry':
-      return branch(run, body);
-    case 'revoke': {
-      run.access_token_hash = null;
-      run.token_expires_at = nowIso();
-      run.updated_at = nowIso();
-      persist();
-      return { payload: { ok: true } };
-    }
+      if (run.state !== 'failed') throw fail('RETRY_REQUIRES_FAILED_RUN', 'only a failed run can be retried', 409);
+      return spawnChild(run, 'retry', body.preferences);
     default:
-      throw fail('UNKNOWN_OPERATION', 400);
+      throw fail('UNKNOWN_OPERATION', `unsupported control-plane operation: ${op || '(none)'}`, 400);
   }
 }
 
-module.exports = { localControlRequest, reset, STORE_PATH };
+module.exports = {
+  localControlRequest,
+  reload,
+  resetLimits,
+  materialize,
+  snapshotPayload,
+  hashToken,
+  reset,
+  STORE_PATH,
+  RUN_VERSION
+};

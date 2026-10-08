@@ -7,10 +7,10 @@ const SOURCES={
   forasna:{provider:'forasna',domain:'forasna.com'}
 };
 
-async function runProvider(query,{location='',provider,domain}) {
+async function runProvider(query,{location='',provider,domain,timeBudgetMs}) {
   let result;
   try {
-    result=await searchJobBoard(query,{location,provider,domain});
+    result=await searchJobBoard(query,{location,provider,domain,timeBudgetMs});
   } catch(error) {
     // A failed provider is a failed task, never a fabricated source row.
     const failure=new Error(provider+' search failed: '+String(error.message||error));
@@ -29,9 +29,11 @@ async function runProvider(query,{location='',provider,domain}) {
   };
 }
 
-async function searchJobs(query,{location='',sourceIds=['wuzzuf','forasna']}={}) {
+async function searchJobs(query,{location='',sourceIds=['wuzzuf','forasna'],timeBudgetMs}={}) {
   const wanted=[...new Set(sourceIds)].map(id=>SOURCES[id]).filter(Boolean);
-  const results=await Promise.all(wanted.map(provider=>runProvider(query,{location,...provider})));
+  // The per-batch budget is shared by every provider in the batch, so one slow
+  // board cannot consume the whole serverless invocation.
+  const results=await Promise.all(wanted.map(provider=>runProvider(query,{location,timeBudgetMs,...provider})));
   return results.reduce((acc,item)=>({
     documents:acc.documents.concat(item.documents),
     sources:acc.sources.concat(item.sources),

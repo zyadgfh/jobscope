@@ -1,0 +1,55 @@
+name: Deploy to Vercel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: vercel-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The deployment is skipped (not failed) until the repository secrets exist,
+      # so the workflow is safe to merge before the project is linked.
+      - id: guard
+        name: Check deployment secrets
+        run: |
+          if [ -n "${{ secrets.VERCEL_TOKEN }}" ] && [ -n "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Vercel deployment skipped::Add VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID repository secrets to enable automatic deployment."
+          fi
+
+      - if: steps.guard.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - if: steps.guard.outputs.enabled == 'true'
+        name: Deploy to production
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npm install -g vercel@latest
+          vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+
+      - if: steps.guard.outputs.enabled == 'true'
+        name: Verify the control plane from the deployed environment
+        env:
+          RESEARCH_CONTROL_URL: ${{ secrets.RESEARCH_CONTROL_URL }}
+        run: |
+          if [ -n "$RESEARCH_CONTROL_URL" ]; then
+            node scripts/check-control-plane.js
+          else
+            echo "::notice title=Readiness probe skipped::Add the RESEARCH_CONTROL_URL secret to verify the control plane after deploy."
+          fi

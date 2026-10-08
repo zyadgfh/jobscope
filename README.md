@@ -23,6 +23,27 @@ JobScope نواة تنفيذية **تعمل فعليًا من طرف إلى طر
 
 لا يحتاج التشغيل المحلي إلى أي مفاتيح: `server.js` يستخدم control plane مدمجًا (`RESEARCH_CONTROL_URL=local`) ويحفظ حالته في ملف JSON مؤقت. للإنتاج، عيّن `RESEARCH_CONTROL_URL` إلى دالة Supabase Edge (انظر `.env.example`).
 
+## النشر على Vercel
+
+المشروع **جاهز للنشر**: بلا تبعيات npm وبلا خطوة build، وإعدادات المنصة مضبوطة في `vercel.json` (رؤوس أمان + CSP، `no-store` لمسارات `/api`، حد 60 ثانية و1024 MB لدوال `api/**`، وإعادة توجيه `/health`).
+
+    npm i -g vercel
+    vercel login
+    vercel link          # اربط المجلد بمشروع Vercel (Framework: Other، Build Command: فارغ)
+    vercel --prod
+
+قبل النشر (مرة واحدة، على Supabase):
+
+    npx supabase db push                                   # يطبّق الترحيلين، ومنهما run-scoped retrieval
+    npx supabase functions deploy research-control --no-verify-jwt
+
+وبعد النشر:
+
+    RESEARCH_CONTROL_URL=https://YOUR_PROJECT.supabase.co/functions/v1/research-control npm run deploy:check
+
+متغيرات البيئة المطلوبة ومصفوفتها كاملة، وخطوات الاستيراد من GitHub، والتحقق بعد النشر، واستكشاف الأخطاء، والتراجع: `docs/DEPLOYMENT.md`.
+نشر آلي جاهز في `.github/workflows/deploy-vercel.yml` (يُفعَّل بإضافة أسرار `VERCEL_TOKEN` و`VERCEL_ORG_ID` و`VERCEL_PROJECT_ID`).
+
 ## API
 
 - `GET  /api/health` و `GET /health`
@@ -50,4 +71,5 @@ JobScope نواة تنفيذية **تعمل فعليًا من طرف إلى طر
 
 - `LinkedIn` يُعامل كـ manual_research (فتح يدوي) ولا يُجلب آليًا.
 - الاعتماد على DuckDuckGo HTML للكشف هشّ بطبيعته ومُعزول في `src/application/duckduckgo-search.js` ليُستبدَل بمزوّد آخر.
-- أي إصدار إنتاجي يحتاج تعيين متغيرات البيئة على منصة النشر (انظر `.env.example`).
+- على Vercel (دوال بلا حالة، بحد 60 ثانية للطلب) كل تنفيذ يمر بدفعة واحدة مقيّدة بميزانية بحث (`DEFAULT_SEARCH_BUDGET_MS` = 18 ثانية، بحد أقصى 30) ثم يعيد تسليم الحالة؛ لهذا تُستدعى `POST /api/research/runs/execute/:id` في حلقة من الواجهة.
+- أي إصدار إنتاجي يحتاج تعيين متغيرات البيئة على منصة النشر (انظر `.env.example` و`docs/DEPLOYMENT.md`).

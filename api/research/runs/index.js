@@ -4,6 +4,7 @@ const { buildQueryPlan, buildExecution } = require('../../../src/domain/research
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
   const body = req.body || {};
+  const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   try {
     const domain = body.domain === 'general' ? 'general' : 'jobs';
     const plan = buildQueryPlan({ goal: body.goal, location: body.location || '', domain });
@@ -14,7 +15,7 @@ module.exports = async function handler(req, res) {
       mode: body.depth === 'deep' ? 'quality' : (body.mode || 'balanced'),
       preferences: body.preferences || {},
       plan
-    });
+    }, { ip });
     res.setHeader('cache-control', 'no-store');
     return res.status(201).json(result);
   } catch (error) {

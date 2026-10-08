@@ -2,10 +2,12 @@
 const { createNodeHandler } = require('./node-adapter');
 const { applySecurityHeaders } = require('./security-headers');
 
-// The very same handlers Vercel deploys, so `npm start` and production cannot drift.
+// The same entry points Vercel deploys (`api/**`), so `npm start` and production
+// cannot drift. Thin `api/**` files delegate to shared cores in `api/_shared/`.
 const createRun = require('../../api/research/runs/index.js');
 const runById = require('../../api/research/runs/[id].js');
 const executeRun = require('../../api/research/runs/execute/[id].js');
+const executeRoot = require('../../api/research/runs/execute/index.js');
 const runEvidence = require('../../api/research/runs/[id]/evidence.js');
 const exportRun = require('../../api/research/runs/[id]/export.js');
 const fetchSource = require('../../api/research/sources/fetch.js');
@@ -14,6 +16,7 @@ const health = require('../../api/health.js');
 // URL shapes mirror the deployed file layout exactly:
 //   api/research/runs/index.js          -> POST /api/research/runs
 //   api/research/runs/execute/[id].js   -> POST /api/research/runs/execute/:id
+//   api/research/runs/execute/index.js  -> POST /api/research/runs/execute (id is in the token)
 //   api/research/runs/[id].js           -> GET|POST /api/research/runs/:id
 //   api/research/runs/[id]/evidence.js  -> POST /api/research/runs/:id/evidence
 //   api/research/runs/[id]/export.js    -> GET  /api/research/runs/:id/export
@@ -22,6 +25,7 @@ const ROUTES = [
   { method: 'GET', pattern: /^\/(api\/)?health$/, handler: health, url: '/api/health' },
   { method: 'POST', pattern: /^\/api\/research\/runs$/, handler: createRun, url: '/api/research/runs' },
   { method: 'POST', pattern: /^\/api\/research\/runs\/execute\/[^/]+$/, handler: executeRun, url: '/api/research/runs/execute/:id' },
+  { method: 'POST', pattern: /^\/api\/research\/runs\/execute$/, handler: executeRoot, url: '/api/research/runs/execute' },
   { method: 'POST', pattern: /^\/api\/research\/runs\/[^/]+\/evidence$/, handler: runEvidence, url: '/api/research/runs/:id/evidence' },
   { method: 'GET', pattern: /^\/api\/research\/runs\/[^/]+\/export$/, handler: exportRun, url: '/api/research/runs/:id/export' },
   { method: 'GET', pattern: /^\/api\/research\/runs\/[^/]+$/, handler: runById, url: '/api/research/runs/:id' },
@@ -54,7 +58,9 @@ function registerResearchRoutes(server) {
     applySecurityHeaders(res);
     res.setHeader('cache-control', 'no-store');
 
-    const route = findRoute(req.method, url.pathname);
+    // HEAD is answered like GET (Node drops the body itself), which is how the
+    // platform treats header probes.
+    const route = findRoute(req.method === 'HEAD' ? 'GET' : req.method, url.pathname);
     if (!route) {
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ error: 'NOT_FOUND' }));

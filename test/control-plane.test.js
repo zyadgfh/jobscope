@@ -10,10 +10,12 @@ fs.rmSync(process.env.JOBSCOPE_LOCAL_STORE, { force: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { call, normalizeToken, isPlausibleToken } = require('../src/infrastructure/research-control-client');
-const { reset } = require('../src/infrastructure/local-research-control');
+const { reset, resetLimits, reload } = require('../src/infrastructure/local-research-control');
 const { buildQueryPlan, buildExecution } = require('../src/domain/research/query-planner');
 
 async function newRun(goal = 'Data Entry') {
+  // A fresh visitor: the create limit is per IP, exactly like the Edge Function.
+  resetLimits();
   const plan = buildQueryPlan({ goal, location: 'Alexandria', domain: 'jobs' });
   plan.execution = buildExecution({ depth: 'auto' });
   const created = await call({ op: 'create', goal, preferences: { targetLocations: ['Alexandria'] }, plan });
@@ -34,12 +36,31 @@ test('tokens are compared by hash and never stored in clear', async () => {
   reset();
   const { run, accessToken } = await newRun();
   const store = JSON.parse(fs.readFileSync(process.env.JOBSCOPE_LOCAL_STORE, 'utf8'));
-  const row = store.runs[run.id];
+  const row = store.runs.find(entry => entry.id === run.id);
+  assert.ok(row, 'the run was persisted');
   assert.notEqual(row.access_token_hash, accessToken);
   assert.equal(row.access_token_hash.length, 64);
   await expectCode(call({ op: 'get' }, { token: 'wrong-token-value-1234' }), 'UNAUTHORIZED');
   const read = await call({ op: 'get' }, { token: accessToken });
   assert.equal(read.run.id, run.id);
+});
+
+test('a store written by an older build is migrated instead of crashing', async () => {
+  // Older builds keyed runs by id; the current one keeps an array.
+  fs.writeFileSync(process.env.JOBSCOPE_LOCAL_STORE, JSON.stringify({
+    runs: { 'legacy-1': { id: 'legacy-1', goal: 'old', state: 'created', plan: {} } },
+    tokens: [],
+    events: []
+  }));
+  reload();
+  resetLimits();
+  const created = await newRun('Migration check');
+  assert.ok(created.run.id);
+  const read = await call({ op: 'get' }, { token: created.accessToken });
+  assert.equal(read.run.goal, 'Migration check');
+  const store = JSON.parse(fs.readFileSync(process.env.JOBSCOPE_LOCAL_STORE, 'utf8'));
+  assert.ok(Array.isArray(store.runs), 'the store is rewritten in the current shape');
+  assert.ok(store.runs.some(run => run.id === 'legacy-1'), 'the legacy run survives');
 });
 
 test('a bearer prefix is tolerated exactly once', async () => {
