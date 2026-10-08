@@ -3,23 +3,28 @@
 ## Runtime controls
 
 - No secrets are shipped to browser assets.
-- Security headers are configured in `vercel.json`.
-- API payloads are bounded by the Node runtime implementation.
-- Research claims must carry evidence status and confidence.
+- Security headers are configured in vercel.json.
+- API payloads and stored source documents are bounded.
+- Research claims carry explicit evidence status, provenance, and confidence.
 - Protected sources are never bypassed.
-- Supabase application tables live in a non-exposed `app` schema with RLS enabled and no anonymous grants.
-- The legacy public report table has anonymous read/write access revoked.
+- Public retrieval validates destination domains, blocks private-network targets and embedded credentials, re-validates redirects, restricts content types, bounds response size, and applies request limits.
+- Control-plane requests reject unexpected redirects and validate bearer-token shape before execution.
+- Untrusted research content is escaped before DOM insertion.
 
-## Deployment controls
+## Supabase controls
 
-- Production deployment is created from reviewed GitHub source.
-- GitHub Actions runs Node tests.
-- Production runtime errors are checked after deployment.
-- Provider credentials remain environment-side.
+- Application tables are kept in a protected app schema with RLS enabled.
+- Anonymous/authenticated direct grants to application tables are revoked.
+- Legacy public-report anonymous access has been revoked.
+- Guest control-plane RPC execution was revoked rather than exposing privileged database access.
+- The active research-control Edge Function is the server-side control plane; service-role credentials are not shipped to the browser.
 
-## Known limitation
+## Current status
 
-The current production deployment contains the executable Research Run control plane and honest UI, but source retrieval adapters, cross-source extraction, Evidence Graph persistence, scoring, and authentication are still staged behind the foundation. The UI intentionally reports Unknown rather than fabricating results until those layers are active.
+The executable v0.8 pipeline includes checkpointed/resumable execution, source retrieval, job extraction and normalization, evidence integrity, cross-source verification, decision scoring, recommendation/report generation, and durable Supabase persistence.
 
-- Public source retrieval is domain-allowlisted, blocks private-network targets and embedded credentials, rejects unsafe redirects/content types, limits response size, and applies a per-instance request limit.
-- Supabase publishable access is intentionally low privilege; no secret/service-role credential is shipped to the client.
+The UI displays Unknown or empty results when evidence is insufficient; it does not fabricate market facts or scores.
+
+## Deployment dependency
+
+Vercel production deployment must be verified after release. At the current checkpoint the Vercel GitHub App is still not visible to the team integration, so a new production deployment must not be claimed until that connection is restored and the deployment is verified.
