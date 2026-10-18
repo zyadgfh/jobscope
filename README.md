@@ -2,13 +2,15 @@
 
 واجهة بحث ثنائية اللغة للبحث الوظيفي العميق والبحث العام متعدد المصادر، مبنية حول Research Intelligence Core.
 
-## الحالة الحالية — v0.8
+## الحالة الحالية — v1.0 foundation على فرع التطوير
 
 JobScope يحتوي على Research Run قابل للتنفيذ والاستئناف عبر checkpointed batches، مع تخطيط بحث deterministic، query expansion وgap detection، بحث متعدد المصادر، استخراج وتطبيع فرص العمل، entity resolution محافظ، Evidence Graph وحالات evidence صريحة، تحقق cross-source، decision scoring، recommendation/reporting، وحفظ durable عبر Supabase control plane.
 
 تشمل الحماية SSRF-safe public retrieval، allowlist للمصادر، منع الشبكات الخاصة والـ credentials، إعادة تحقق من redirects، حدود MIME والحجم والمهلة، security headers، bounded payloads، واختبارات Node.js.
 
-واجهة المستخدم تستأنف آخر Research Run نشط تلقائيًا ولا تختلق نتائج أو درجات عند غياب الأدلة.
+واجهة المستخدم تستأنف آخر Research Run نشط تلقائيًا ولا تختلق نتائج أو درجات عند غياب الأدلة. أضيفت طبقة مالك واحدة عبر Supabase Email/Password، إعدادات مزودي البحث server-side، retention لمدة 30 يومًا للبيانات الوسيطة، ومسارات إعداد الإدارة وتحليل CV المحافظ.
+
+قبل اعتماد Production يجب ضبط `SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` وتهيئة حساب المالك في Supabase Auth، ثم إضافة مفاتيح Brave/Tavily في Vault/Secret Store. لا تُحفظ مفاتيح API في ملفات الواجهة.
 
 ## التشغيل محليًا
 
