@@ -1,6 +1,7 @@
 const {call}=require('../../../../src/infrastructure/research-control-client');
 const {searchJobs}=require('../../../../src/application/search-service');
 const {searchWeb}=require('../../../../src/application/generic-web-search');
+const {searchWithProviders}=require('../../../../src/application/provider-search');
 const {scoreEvidence}=require('../../../../src/domain/research/scoring');
 const {buildRecommendation}=require('../../../../src/domain/research/recommendation');
 const {buildReport}=require('../../../../src/domain/research/report');
@@ -103,8 +104,6 @@ function evaluateRunShell(run){return {id:run.id};}
 module.exports=async function handler(req,res){
   if(req.method!=='POST')return res.status(405).json({error:'METHOD_NOT_ALLOWED'});
   const token=String(req.headers.authorization||'').replace(/^Bearer\s+/i,'').trim();
-  const tokenIsJwt=/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
-  if(!tokenIsJwt)return res.status(401).json({error:'INVALID_ACCESS_TOKEN'});
   if(!token)return res.status(401).json({error:'UNAUTHORIZED'});
   try{
     let run=(await call({op:'get'},{token})).run;
@@ -124,7 +123,7 @@ module.exports=async function handler(req,res){
       await call({op:'task',taskKey:pendingSearch.task_key,status:'running',attempts:pendingSearch.attempts||0},{token});
       try{
         const result=provider==='duckduckgo'
-          ?await searchWeb(pendingSearch.query,{location:run.plan?.intent?.location||'',maxResults:3})
+          ?await searchWithProviders(pendingSearch.query,{location:run.plan?.intent?.location||'',maxResults:3})
           :await searchJobs(pendingSearch.query,{location:run.plan?.intent?.location||'',sourceIds:[provider]});
         await call({op:'ingest',sources:result.sources||[],documents:result.documents||[],jobs:(result.jobs||[]).map(j=>({...j,sourceKey:j.sourceId})),evidence:result.evidence||[]},{token});
         await call({op:'task',taskKey:pendingSearch.task_key,status:'completed'},{token});

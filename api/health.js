@@ -1,1 +1,1 @@
-module.exports=function handler(req,res){res.setHeader('cache-control','no-store');return res.status(200).json({ok:true,app:'jobscope',version:'0.8.0',runtime:'vercel',durableControlPlane:true,controlPlane:'supabase-edge-function'});};
+module.exports=function handler(req,res){res.setHeader('cache-control','no-store');return res.status(200).json({ok:true,app:'jobscope',version:'1.0.0',runtime:'vercel',durableControlPlane:true,controlPlane:'supabase-edge-function',ownerAuth:'supabase-email-password',providerFallback:true});};
