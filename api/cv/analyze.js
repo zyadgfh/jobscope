@@ -1,8 +1,9 @@
 const OWNER_EMAIL = (process.env.OWNER_EMAIL || 'zyadgamal796@gmail.com').toLowerCase();
+const ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const ALLOWED = new Set(['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','text/plain','application/rtf','text/rtf','application/vnd.oasis.opendocument.text']);
 const SKILLS = ['javascript','typescript','python','sql','postgresql','mysql','excel','power bi','tableau','react','node.js','node','aws','azure','docker','kubernetes','git','api','rest','graphql','project management','data analysis','research','communication','arabic','english'];
 function bearer(req){return String(req.headers.authorization||'').replace(/^Bearer\s+/i,'').trim()}
-async function userFromToken(token){const url=process.env.SUPABASE_URL||'https://mtziqpyvgebthoynalbq.supabase.co',key=process.env.SUPABASE_SERVICE_ROLE_KEY;if(!key||!token)return null;const r=await fetch(url+'/auth/v1/user',{headers:{apikey:key,authorization:'Bearer '+token}});if(!r.ok)return null;return r.json()}
+async function userFromToken(token){const url=process.env.SUPABASE_URL||'https://mtziqpyvgebthoynalbq.supabase.co';if(!ANON_KEY||!token)return null;const r=await fetch(url+'/auth/v1/user',{headers:{apikey:ANON_KEY,authorization:'Bearer '+token}});if(!r.ok)return null;return r.json()}
 module.exports=async function handler(req,res){
   if(req.method!=='POST')return res.status(405).json({error:'METHOD_NOT_ALLOWED'});
   const user=await userFromToken(bearer(req));
